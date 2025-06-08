@@ -1,0 +1,197 @@
+"""
+OFDM系统配置模块
+作者：AI助手
+日期：2024-05-31
+"""
+
+from dataclasses import dataclass
+from typing import Optional, List, Tuple
+import numpy as np
+import yaml
+
+@dataclass
+class OFDMConfig:
+    """OFDM系统配置参数"""
+    # 基本参数
+    n_fft: int = 64                    # FFT大小
+    cp_len: int = 16                   # 循环前缀长度
+    mod_order: int = 4                 # 调制阶数（2:QPSK, 4:16QAM, 6:64QAM）
+    num_symbols: int = 100             # OFDM符号数量
+    
+    # 导频配置
+    pilot_pattern: str = 'comb'        # 导频图案类型：'comb'（梳状）或'block'（块状）
+    pilot_spacing: int = 8             # 导频间隔（梳状导频）
+    pilot_blocks: int = 4              # 导频块数量（块状导频）
+    pilot_power: float = 1.0           # 导频功率（相对于数据符号）
+    pilot_symbols: List[int] = None    # 包含导频的OFDM符号索引列表，None表示所有符号都包含导频
+    pilot_period: int = 1              # 导频周期（每隔多少个OFDM符号插入一次导频）
+    
+    # 信道估计配置
+    est_method: str = 'linear'         # 信道估计方法：'linear'（线性插值）或'ls'（最小二乘）
+    equalizer: str = 'zf'              # 均衡器类型：'zf'（零强制）或'mmse'（最小均方误差）
+    
+    # 同步配置
+    sync_method: str = 'auto'          # 同步方法：'auto'（自动）或'manual'（手动）
+    freq_offset: float = 0.0           # 初始频偏估计值
+    timing_offset: int = 0             # 初始定时偏移估计值
+    _pilot_symbols_cache: Optional[np.ndarray] = None  # 新增缓存属性
+    def __post_init__(self):
+        """初始化后处理"""
+        # 验证基本参数
+        if self.n_fft <= 0 or not self._is_power_of_2(self.n_fft):
+            raise ValueError("FFT大小必须是2的幂")
+        if self.cp_len <= 0:
+            raise ValueError("循环前缀长度必须大于0")
+        if self.mod_order not in [2, 4, 6]:
+            raise ValueError("调制阶数必须是2、4或6")
+        if self.num_symbols <= 0:
+            raise ValueError("OFDM符号数量必须大于0")
+            
+        # 验证导频配置
+        if self.pilot_pattern not in ['comb', 'block']:
+            raise ValueError("导频图案类型必须是'comb'或'block'")
+        if self.pilot_spacing <= 0:
+            raise ValueError("导频间隔必须大于0")
+        if self.pilot_blocks <= 0:
+            raise ValueError("导频块数量必须大于0")
+        if self.pilot_power <= 0:
+            raise ValueError("导频功率必须大于0")
+        if self.pilot_period <= 0:
+            raise ValueError("导频周期必须大于0")
+        if self.pilot_symbols is not None:
+            if not all(0 <= idx < self.num_symbols for idx in self.pilot_symbols):
+                raise ValueError("导频符号索引必须在有效范围内")
+            if len(set(self.pilot_symbols)) != len(self.pilot_symbols):
+                raise ValueError("导频符号索引不能重复")
+            
+        # 验证信道估计配置
+        if self.est_method not in ['linear', 'ls']:
+            raise ValueError("信道估计方法必须是'linear'或'ls'")
+        if self.equalizer not in ['zf', 'mmse']:
+            raise ValueError("均衡器类型必须是'zf'或'mmse'")
+            
+        # 验证同步配置
+        if self.sync_method not in ['auto', 'manual']:
+            raise ValueError("同步方法必须是'auto'或'manual'")
+    
+    def _is_power_of_2(self, n: int) -> bool:
+        """检查一个数是否是2的幂"""
+        return n > 0 and (n & (n - 1)) == 0
+    
+    def get_pilot_symbol_indices(self) -> np.ndarray:
+        """获取包含导频的OFDM符号索引
+        
+        Returns:
+            包含导频的OFDM符号索引数组
+        """
+        if self.pilot_symbols is not None:
+            return np.array(self.pilot_symbols)
+        else:
+            return np.arange(0, self.num_symbols, self.pilot_period)
+    
+    def has_pilot(self, symbol_idx: int) -> bool:
+        """检查指定的OFDM符号是否包含导频
+        
+        Args:
+            symbol_idx: OFDM符号索引
+            
+        Returns:
+            是否包含导频
+        """
+        if self.pilot_symbols is not None:
+            return symbol_idx in self.pilot_symbols
+        else:
+            return symbol_idx % self.pilot_period == 0
+    
+    def get_pilot_indices(self) -> np.ndarray:
+        """获取导频位置索引
+        
+        Returns:
+            导频位置索引数组
+        """
+        if self.pilot_pattern == 'comb':
+            # 梳状导频
+            return np.arange(0, self.n_fft, self.pilot_spacing)
+        else:
+            # 块状导频
+            block_size = self.n_fft // self.pilot_blocks
+            indices = []
+            for i in range(self.pilot_blocks):
+                start = i * block_size
+                indices.extend(range(start, start + block_size // 4))
+            return np.array(indices)
+    
+    def get_pilot_symbols(self) -> np.ndarray:
+        """生成并缓存导频符号，保证全局唯一"""
+        if self._pilot_symbols_cache is None:
+            pilot_indices = self.get_pilot_indices()
+            # 固定随机种子，保证每次实验一致（可选）
+            # np.random.seed(1234)
+            pilot_bits = np.random.randint(0, 2, size=len(pilot_indices) * 2)
+            pilot_symbols = self._qpsk_modulate(pilot_bits)
+            self._pilot_symbols_cache = pilot_symbols * np.sqrt(self.pilot_power)
+        return self._pilot_symbols_cache
+    
+    def _qpsk_modulate(self, bits: np.ndarray) -> np.ndarray:
+        """QPSK调制
+        
+        Args:
+            bits: 输入比特流
+            
+        Returns:
+            调制后的符号
+        """
+        # 将比特流重塑为2比特一组
+        bits_reshaped = bits.reshape(-1, 2)
+        # QPSK映射
+        symbols = (1 - 2 * bits_reshaped[:, 0]) + 1j * (1 - 2 * bits_reshaped[:, 1])
+        # 功率归一化
+        return symbols / np.sqrt(2)
+    
+    def get_data_indices(self) -> np.ndarray:
+        """获取数据子载波位置索引
+        
+        Returns:
+            数据子载波位置索引数组
+        """
+        pilot_indices = self.get_pilot_indices()
+        all_indices = np.arange(self.n_fft)
+        return np.setdiff1d(all_indices, pilot_indices)
+    
+    def get_num_data_carriers(self) -> int:
+        """获取数据子载波数量
+        
+        Returns:
+            数据子载波数量
+        """
+        return len(self.get_data_indices())
+    
+    def get_num_pilot_carriers(self) -> int:
+        """获取导频子载波数量
+        
+        Returns:
+            导频子载波数量
+        """
+        return len(self.get_pilot_indices())
+    
+    def get_total_bits_per_symbol(self) -> int:
+        """获取每个OFDM符号的总比特数
+        
+        Returns:
+            总比特数
+        """
+        return self.get_num_data_carriers() * self.mod_order
+    
+    def get_total_bits(self) -> int:
+        """获取整个传输的总比特数
+        
+        Returns:
+            总比特数
+        """
+        return self.get_total_bits_per_symbol() * self.num_symbols
+
+def load_config(config_path: str) -> OFDMConfig:
+    """从YAML文件加载配置"""
+    with open(config_path, 'r') as f:
+        config_dict = yaml.safe_load(f)
+    return OFDMConfig(**config_dict) 
