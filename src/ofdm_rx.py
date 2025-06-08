@@ -144,31 +144,98 @@ def estimate_timing_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray,
     
     return timing_offset
 
-def estimate_channel(rx_symbols: np.ndarray, pilot_symbols: np.ndarray, 
-                    pilot_indices: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
-    """估计信道响应
+def estimate_channel(rx_symbols: np.ndarray, cfg: OFDMConfig, pilot_symbols: np.ndarray = None, 
+                    pilot_indices: np.ndarray = None) -> np.ndarray:
+    """信道估计
     
     Args:
         rx_symbols: 接收符号
-        pilot_symbols: 导频符号
-        pilot_indices: 导频位置
         cfg: 系统配置参数
+        pilot_symbols: 导频符号（可选）
+        pilot_indices: 导频位置（可选）
     
     Returns:
         估计的信道响应
     """
+    if pilot_symbols is None or pilot_indices is None:
+        pilot_symbols = cfg.get_pilot_symbols()
+        pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+        pilot_indices = cfg.get_pilot_indices()
+    
     # 使用接收信号的导频位置与本地导频计算信道响应
-    rx_pilots = rx_symbols[pilot_indices]
-    h_pilot = rx_pilots / pilot_symbols
+    # 修改索引方式，确保维度匹配
+    rx_pilots = np.zeros((len(pilot_symbol_indices), cfg.n_fft), dtype=np.complex64)
+    for i, sym_idx in enumerate(pilot_symbol_indices):
+        rx_pilots[i, :] = rx_symbols[sym_idx, :]
     
-    # 使用线性插值估计其他子载波的信道响应
-    h_est = np.interp(np.arange(cfg.n_fft), 
-                     pilot_indices, 
-                     h_pilot,
-                     left=h_pilot[0],
-                     right=h_pilot[-1])
+    #将rx_pilots和rx_symbols的维度对齐
+    pilot_symbols_pad = np.zeros(cfg.n_fft, dtype=np.complex64)
+    pilot_symbols_pad[pilot_indices] = pilot_symbols
+
+    # 计算每个导频位置的信道响应，使用共轭相乘
+    h_pilot = rx_pilots * np.conj(pilot_symbols_pad)
     
-    return h_est
+    # 如果pilot_symbols_pad不为0，则将h_pilot的值除以pilot_symbols_pad模的平方
+    for i in range(len(pilot_symbol_indices)):
+        idx = np.abs(pilot_symbols_pad) != 0
+        h_pilot[i, idx] = h_pilot[i, idx] / np.abs(pilot_symbols_pad[idx]) ** 2
+    
+    #非导频位置的信道响应为其相邻导频位置的信道响应的平均
+    h_est = np.zeros((len(pilot_symbol_indices), cfg.n_fft), dtype=np.complex64)
+    for i in range(cfg.n_fft):
+        if i in pilot_indices:
+            h_est[:, i] = h_pilot[:, i]
+        else:
+            # 找到最近的导频位置
+            left_pilots = pilot_indices[pilot_indices < i]
+            right_pilots = pilot_indices[pilot_indices > i]
+            
+            if len(left_pilots) > 0 and len(right_pilots) > 0:
+                # 正常情况：左右都有导频
+                left_pilot = left_pilots[-1]
+                right_pilot = right_pilots[0]
+                alpha = (i - left_pilot) / (right_pilot - left_pilot)
+                h_est[:, i] = (1 - alpha) * h_pilot[:, left_pilot] + alpha * h_pilot[:, right_pilot]
+            elif len(left_pilots) > 0:
+                # 只有左边有导频（最后一个导频之后的位置）
+                h_est[:, i] = h_pilot[:, left_pilots[-1]]
+            else:
+                # 只有右边有导频（第一个导频之前的位置）
+                h_est[:, i] = h_pilot[:, right_pilots[0]]
+    
+    # 使用滑动平均计算每个窗口的信道响应，窗口大小为2*cfg.pilot_spacing+1
+    window_size = 2 * cfg.pilot_spacing + 1
+    h_est_smooth = np.zeros_like(h_est)
+    for i in range(len(pilot_symbol_indices)):
+        for j in range(cfg.n_fft):
+            # 计算当前窗口的起始和结束位置
+            start = max(0, j - cfg.pilot_spacing)
+            end = min(cfg.n_fft, j + cfg.pilot_spacing + 1)
+            # 计算实际窗口大小
+            actual_window_size = end - start
+            # 使用实际窗口大小进行平均
+            h_est_smooth[i, j] = np.mean(h_est[i, start:end])
+    
+    # 对h_est在每个子载波维度进行插值
+    h_est_interp = np.zeros((cfg.num_symbols, cfg.n_fft), dtype=np.complex64)
+    for i in range(cfg.n_fft):
+        # 分别对实部和虚部进行插值
+        real_interp = np.interp(np.arange(cfg.num_symbols), 
+                              pilot_symbol_indices, 
+                              h_est_smooth[:, i].real,
+                              left=h_est_smooth[0, i].real,
+                              right=h_est_smooth[-1, i].real)
+        
+        imag_interp = np.interp(np.arange(cfg.num_symbols), 
+                              pilot_symbol_indices, 
+                              h_est_smooth[:, i].imag,
+                              left=h_est_smooth[0, i].imag,
+                              right=h_est_smooth[-1, i].imag)
+        
+        # 组合实部和虚部
+        h_est_interp[:, i] = real_interp + 1j * imag_interp
+    
+    return h_est_interp
 
 def channel_equalization(rx_symbols: np.ndarray, h_est: np.ndarray, 
                         noise_var: Optional[float] = None) -> np.ndarray:
@@ -182,12 +249,52 @@ def channel_equalization(rx_symbols: np.ndarray, h_est: np.ndarray,
     Returns:
         均衡后的符号
     """
+import numpy as np
+from numpy.typing import NDArray
+from typing import Optional
+
+
+def channel_equalization(
+    rx_symbols: NDArray[np.complex128],
+    h_est: NDArray[np.complex128],
+    noise_var: Optional[float] = None,
+) -> NDArray[np.complex128]:
+    """
+    MMSE/ZF 频域均衡器
+
+    对每个子载波 k 执行
+        X̂_k = H*_k · R_k / ( |H_k|² + σ² )
+    当 noise_var=None 或 0 时退化为零强制 (ZF)。
+
+    参数
+    ----
+    rx_symbols : shape (..., Nfft)
+        接收频域符号（去 CP、FFT 后）
+    h_est      : shape (..., Nfft) 或 (Nfft,)
+        频域信道估计；可按符号、天线广播
+    noise_var  : float, optional
+        复 AWGN 单复采样方差 σ²；若为 None 则默认为 0 (ZF)
+
+    返回
+    ----
+    eq_symbols : 与 rx_symbols 同形状
+        均衡后的符号
+    """
     if noise_var is None:
-        # 零强制均衡
-        return rx_symbols / h_est
-    else:
-        # MMSE均衡
-        return rx_symbols * np.conj(h_est) / (np.abs(h_est)**2 + noise_var)
+        noise_var = 0.0
+
+    # 保证广播： h_est 可是一维 (Nfft,) 也可与 rx 符合
+    # conj(H) / (|H|^2 + σ²)
+    denom = np.abs(h_est) ** 2 + noise_var
+    # 防止 0/0；若 H≈0, 用 epsilon 保底, 避免 nan/inf
+    eps = np.finfo(rx_symbols.dtype).eps
+    denom = np.maximum(denom, eps)
+
+    w_mmse = np.conj(h_est) / denom
+    eq_symbols = rx_symbols * w_mmse  # 广播乘
+
+    return eq_symbols
+
 
 def remove_cp_and_fft(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     """移除循环前缀并进行FFT
@@ -343,7 +450,7 @@ if __name__ == "__main__":
     
     # 测试时延估计和补偿
     print("\n测试时延估计...")
-    timing_offset = -3  # 添加时延
+    timing_offset = 3  # 添加时延
     signal_with_timing = np.roll(time_signal, timing_offset)
     
     # 移除CP并进行FFT

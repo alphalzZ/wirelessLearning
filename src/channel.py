@@ -5,9 +5,10 @@
 """
 
 import numpy as np
-from typing import Tuple
 import sys
 from pathlib import Path
+from numpy.typing import NDArray
+from typing import Tuple, Optional
 
 # 添加项目根目录到Python路径
 project_root = str(Path(__file__).parent.parent)
@@ -69,46 +70,71 @@ def rayleigh_channel(signal: np.ndarray, snr_db: float) -> Tuple[np.ndarray, np.
     
     return rx_signal, h
 
-def multipath_channel(signal: np.ndarray, snr_db: float, 
-                     num_paths: int = 4, 
-                     max_delay: int = 16) -> Tuple[np.ndarray, np.ndarray]:
-    """多径衰落信道
-    
-    Args:
-        signal: 输入信号
-        snr_db: 信噪比(dB)
-        num_paths: 多径数量
-        max_delay: 最大时延（采样点数）
-    
-    Returns:
-        Tuple[np.ndarray, np.ndarray]: (经过多径信道的信号, 信道响应)
+def multipath_channel(
+    signal: NDArray[np.complex128],
+    snr_db: float,
+    num_paths: int = 4,
+    max_delay: int = 16,
+    rng: Optional[np.random.Generator] = None,
+) -> Tuple[NDArray[np.complex128], NDArray[np.complex128]]:
+    r"""
+    频率选择性瑞利多径信道 + AWGN
+
+    参数
+    ----
+    signal     : (N,)  发送时域复基带
+    snr_db     : 目标平均 SNR (以 **接收端见到的符号功率** 为 1)
+    num_paths  : 多径条数 (含直射 LOS / 最早径)
+    max_delay  : 最大离散时延 (采样数, 含 0)
+    rng        : numpy.random.Generator, 便于复现 (默认全局 RNG)
+
+    返回
+    ----
+    rx_signal  : shape 与 signal 相同, 经过信道 + 加噪
+    h          : (max_delay+1,) 离散时域脉冲响应
     """
-    # 生成随机时延
-    delays = np.random.randint(0, max_delay, num_paths)
-    delays[0] = 0  # 第一条路径无时延
-    
-    # 生成随机复增益
-    gains = (np.random.randn(num_paths) + 1j * np.random.randn(num_paths)) / np.sqrt(2)
-    gains = gains / np.sqrt(np.sum(np.abs(gains)**2))  # 功率归一化
-    
-    # 构建信道响应
-    h = np.zeros(max_delay, dtype=np.complex64)
-    for delay, gain in zip(delays, gains):
-        h[delay] = gain
-    
-    # 计算信号功率
-    signal_power = np.mean(np.abs(signal) ** 2)
-    
-    # 计算噪声功率
-    noise_power = signal_power / (10 ** (snr_db / 10))
-    
-    # 生成复高斯噪声
-    noise = np.sqrt(noise_power/2) * (np.random.randn(*signal.shape) + 
-                                     1j * np.random.randn(*signal.shape))
-    
-    # 通过信道并添加噪声
-    rx_signal = np.convolve(signal, h, mode='same') + noise
-    
+    if rng is None:
+        rng = np.random.default_rng()
+
+    # -------------------------------------------------
+    # 1) 随机时延 —— 保证“互不重叠”且包含 0
+    # -------------------------------------------------
+    if max_delay < num_paths - 1:
+        raise ValueError("max_delay 必须 ≥ num_paths-1")
+    # choice 不放回抽取时延，含 0
+    delays = rng.choice(np.arange(max_delay + 1), size=num_paths, replace=False)
+    delays[0] = 0                           # 保证首条为直射径
+    delays.sort()                           # 递增方便阅读
+
+    # -------------------------------------------------
+    # 2) 瑞利增益，单位平均功率
+    # -------------------------------------------------
+    gains = (rng.standard_normal(num_paths) + 1j * rng.standard_normal(num_paths)) / np.sqrt(2)
+    gains /= np.sqrt(np.sum(np.abs(gains) ** 2))        # 归一化 ∑|g|² = 1
+
+    # -------------------------------------------------
+    # 3) 构造离散脉冲响应 h[n]
+    # -------------------------------------------------
+    h = np.zeros(max_delay + 1, dtype=np.complex128)
+    h[delays] = gains                                   # 重叠时延已避免，无需累加
+
+    # -------------------------------------------------
+    # 4) 通过信道 (线性卷积) —— 长信号用 FFT 卷积更快
+    # -------------------------------------------------
+    rx_wo_noise = np.convolve(signal, h, mode="same")   # 保持与原长一致
+
+    # -------------------------------------------------
+    # 5) AWGN 噪声，参照接收端功率设 SNR
+    # -------------------------------------------------
+    rx_power = np.mean(np.abs(rx_wo_noise) ** 2)        # ≈1 (因我们已归一化)
+    snr_lin  = 10 ** (snr_db / 10)
+    noise_var = rx_power / snr_lin
+    noise_std = np.sqrt(noise_var / 2)                  # 单独对实/虚分量
+
+    noise = noise_std * (rng.standard_normal(signal.shape) +
+                         1j * rng.standard_normal(signal.shape))
+
+    rx_signal = rx_wo_noise + noise
     return rx_signal, h
 
 if __name__ == "__main__":
