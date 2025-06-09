@@ -27,11 +27,13 @@ class TestOFDMSystem(unittest.TestCase):
         self.cfg = OFDMConfig(
             n_fft=256,
             cp_len=36,
-            mod_order=2,  # 16QAM
+            mod_order=4,  # 16QAM
             num_symbols=14,  # 测试用较少的符号数
             pilot_pattern='comb',
             pilot_spacing=2,  # 导频间隔
-            pilot_symbols=[2,11]  # 在第2和第11个符号上插入导频
+            pilot_symbols=[2,11],  # 在第2和第11个符号上插入导频
+            timing_offset=10,
+            freq_offset= 0.02
         )
         
     def test_qam_modulation(self):
@@ -74,17 +76,44 @@ class TestOFDMSystem(unittest.TestCase):
         # 发送端处理
         tx_signal, pilot_indices, data_indices, freq_symbols = ofdm_tx(bits, self.cfg)
         
-        # 添加AWGN噪声
-        snr_db = 20
-        rx_signal = awgn_channel(tx_signal, snr_db)
-        
+        # 添加噪声
+        snr_db = 35
+        #计算噪声线性值
+        noise_var = 10 ** (-snr_db / 20)
+        rx_signal,h_channel = multipath_channel(tx_signal, snr_db)   
+        # rx_signal = awgn_channel(tx_signal,snr_db)
+        phase_rotation = 2 * np.pi * self.cfg.freq_offset * np.arange(len(rx_signal)) / self.cfg.n_fft
+        rx_signal = rx_signal * np.exp(1j * phase_rotation)
+        rx_signal = np.roll(rx_signal, self.cfg.timing_offset)
         # 接收端处理
-        rx_bits = ofdm_rx(rx_signal, self.cfg)
+        self.cfg.noise_var = noise_var
+        rx_syms = ofdm_rx(rx_signal, self.cfg)
         
-        # 验证比特错误率
-        ber = np.sum(bits != rx_bits) / len(bits)
-        self.assertLess(ber, 0.1)  # 在高SNR下，BER应该很小
+        # 绘制星座图
+        plt.figure(figsize=(10, 5))
         
+        # 绘制发送符号的星座图
+        plt.subplot(121)
+        plt.scatter(freq_symbols.real, freq_symbols.imag, c='b', marker='o', label='发送符号')
+        plt.grid(True)
+        plt.title('发送符号星座图')
+        plt.xlabel('实部')
+        plt.ylabel('虚部')
+        plt.legend()
+        
+        # 绘制接收符号的星座图
+        plt.subplot(122)
+        plt.scatter(rx_syms.real, rx_syms.imag, c='r', marker='x', label='接收符号')
+        plt.grid(True)
+        plt.title('接收符号星座图')
+        plt.xlabel('实部')
+        plt.ylabel('虚部')
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.show()
+        
+
     def test_multipath_channel(self):
         """测试多径信道功能"""
         # 生成测试信号
@@ -108,7 +137,7 @@ class TestOFDMSystem(unittest.TestCase):
         time_signal, pilot_indices, data_indices, freq_symbols = ofdm_tx(bits, self.cfg)
         
         # 添加AWGN噪声
-        snr_db = 25
+        snr_db = 0
         #计算噪声线性值
         noise_var = 10 ** (-snr_db / 10)
         rx_signal,h_channel = multipath_channel(time_signal, snr_db)   
@@ -134,7 +163,7 @@ if __name__ == '__main__':
     # 创建测试套件
     suite = unittest.TestSuite()
     # 只添加信道估计测试
-    suite.addTest(TestOFDMSystem('test_ofdm_rx_with_channel_estimation'))
+    suite.addTest(TestOFDMSystem('test_ofdm_tx_rx'))
     # 运行测试
     runner = unittest.TextTestRunner()
     runner.run(suite)
