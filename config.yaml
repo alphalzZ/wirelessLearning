@@ -11,5 +11,5 @@ pilot_symbols: [1,12]
 freq_offset: 0.02
 timing_offset: 100
 est_time: fft_ml  #fft_ml/diff_phase
-channel_type: 'multipath'  #awgn/multipath
+channel_type: awgn  #awgn/multipath
 display_est_result: false
