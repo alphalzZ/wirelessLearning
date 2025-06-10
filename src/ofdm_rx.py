@@ -136,7 +136,7 @@ def compensate_frequency_offset(
     else:
         raise ValueError("signal 维度既不是 1 也不是 2，无法补偿")
 
-def estimate_timing_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray, 
+def estimate_timing_offset_diff_phase(rx_symbols: np.ndarray, pilot_symbols: np.ndarray, 
                          pilot_indices: np.ndarray, cfg: OFDMConfig) -> int:
     """使用导频符号估计符号定时偏移
     
@@ -180,6 +180,81 @@ def estimate_timing_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray,
     timing_offset = int(round(slope * cfg.n_fft / (2 * np.pi)))
     
     return timing_offset
+
+def estimate_timing_offset_fft_ml(rx_symbols: np.ndarray, pilot_symbols: np.ndarray, 
+                                 pilot_indices: np.ndarray, cfg: OFDMConfig, ml_fft_size: int = 512) -> float:
+    """使用FFT最大似然估计符号定时偏移
+    
+    Args:
+        rx_symbols: 接收到的OFDM符号 [num_symbols, n_fft]
+        pilot_symbols: 导频符号
+        pilot_indices: 导频位置索引
+        cfg: OFDM配置参数
+        
+    Returns:
+        int: 估计的定时偏移量
+    """
+    # 提取导频位置的接收信号
+    rx_pilots = np.zeros((len(cfg.pilot_symbols), cfg.n_subcarrier), dtype=rx_symbols.dtype)
+    for i, sym_idx in enumerate(cfg.pilot_symbols):
+        rx_pilots[i, :] = rx_symbols[sym_idx, :]
+    pilot_symbols_pad = np.zeros(cfg.n_subcarrier, dtype=np.complex64)
+    pilot_symbols_pad[pilot_indices] = pilot_symbols
+    # 使用广播机制提取数据
+    h_pilot = rx_pilots * np.conj(pilot_symbols_pad)
+    
+    # 初始化定时偏移数组
+    timing_offsets = []
+    
+    # 对每个导频符号进行处理
+    for t in range(rx_pilots.shape[0]):
+        # 对接收信号进行FFT
+        u = np.fft.fft(h_pilot[t, :], ml_fft_size)
+        U = np.abs(u) ** 2
+        # 找到最大值的索引
+        max_indices = np.where(U == np.max(U))[0]
+        
+        # 确定主要峰值位置
+        if max_indices[0] > ml_fft_size - max_indices[-1]:
+            peak_idx = max_indices[-1]
+            inverse_flag = 1
+        else:
+            peak_idx = max_indices[0]
+            inverse_flag = 0
+            
+        # Quinn/3点估计器计算分数偏移
+        beta_1 = np.real(u[peak_idx - 1] / u[peak_idx])
+        delta_1 = beta_1 / (1 - beta_1)
+        
+        beta_2 = np.real(u[peak_idx + 1] / u[peak_idx])
+        delta_2 = beta_2 / (beta_2 - 1)
+        
+        # 选择合适的delta值
+        if delta_1 > 0 and delta_2 > 0:
+            delta = delta_2
+        else:
+            delta = delta_1
+            
+        # 计算最终的定时偏移
+        if inverse_flag:
+            timing_offset = (peak_idx + delta - 1 - ml_fft_size) / ml_fft_size
+        else:
+            timing_offset = (peak_idx + delta - 1) / ml_fft_size
+            
+        timing_offsets.append(timing_offset)
+    
+    # 返回平均定时偏移
+    return np.mean(timing_offsets) * cfg.n_fft
+def estimate_timing_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray, 
+                         pilot_indices: np.ndarray, cfg: OFDMConfig) -> int:
+    """估计符号定时偏移
+    """
+    if cfg.est_time == 'fft_ml':
+        return estimate_timing_offset_fft_ml(rx_symbols, pilot_symbols, pilot_indices, cfg)
+    elif cfg.est_time == 'diff_phase':
+        return estimate_timing_offset_diff_phase(rx_symbols, pilot_symbols, pilot_indices, cfg)
+    else:
+        raise ValueError("不支持的定时偏移估计方法")
 
 def estimate_channel(rx_symbols: np.ndarray, cfg: OFDMConfig, pilot_symbols: np.ndarray = None, 
                     pilot_indices: np.ndarray = None) -> np.ndarray:
@@ -443,6 +518,7 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     est_timing = estimate_timing_offset(rx_symbols, pilot_symbols, pilot_indices, cfg)
     # 频偏补偿
     est_freq_offset = estimate_frequency_offset(rx_symbols, pilot_symbols, pilot_indices, cfg)
+    print(f"估计的时延: {est_timing}, 估计的频偏: {est_freq_offset}")
     rx_symbols_freq_compensation = compensate_frequency_offset(signal, est_freq_offset, cfg)
     # 时延补偿
     # signal_timing = np.roll(signal,est_timing)
@@ -544,7 +620,7 @@ if __name__ == "__main__":
     rx_symbols_timing = remove_cp_and_fft(signal_with_timing, cfg)
     rx_symbols_timing_compensation = np.zeros_like(rx_symbols_timing)
     # 估计时延
-    est_timing = estimate_timing_offset(rx_symbols_timing, pilot_symbols, pilot_indices, cfg)
+    est_timing = estimate_timing_offset_fft_ml(rx_symbols_timing, pilot_symbols, pilot_indices, cfg)
     print(f"实际时延: {timing_offset}")
     print(f"估计时延: {est_timing}")
     # 时延补偿

@@ -1,7 +1,7 @@
 """
-OFDM·¢ËÍ¶Ë´¦ÀíÄ£¿é
-×÷Õß£ºAIÖúÊÖ
-ÈÕÆÚ£º2024-05-31
+OFDMå‘é€ç«¯å¤„ç†æ¨¡å—
+ä½œè€…ï¼šAIåŠ©æ‰‹
+æ—¥æœŸï¼š2024-05-31
 """
 
 import numpy as np
@@ -10,14 +10,14 @@ import sys
 from pathlib import Path
 import matplotlib.pyplot as plt
 
-# plt.rcParams['font.sans-serif'] = ['SimHei']  # Windows ºÚÌå
-plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']  # Windows Î¢ÈíÑÅºÚ
+# plt.rcParams['font.sans-serif'] = ['SimHei']  # Windows é»‘ä½“
+plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']  # Windows å¾®è½¯é›…é»‘
 # plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']  # macOS
 # plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC']  # Linux
 
-plt.rcParams['axes.unicode_minus'] = False  # ½â¾ö¸ººÅÏÔÊ¾ÎÊÌâ
+plt.rcParams['axes.unicode_minus'] = False  # è§£å†³è´Ÿå·æ˜¾ç¤ºé—®é¢˜
 
-# Ìí¼ÓÏîÄ¿¸ùÄ¿Â¼µ½PythonÂ·¾¶
+# æ·»åŠ é¡¹ç›®æ ¹ç›®å½•åˆ°Pythonè·¯å¾„
 project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
@@ -28,7 +28,7 @@ import numpy as np
 
 def qam_modulation(bits: np.ndarray, Qm: int) -> np.ndarray:
     """
-    5G?NR Gray?coded QAM (38.211?¡ì5.1)
+    5G?NR Gray?coded QAM (38.211?Â§5.1)
     Qm = 2 (QPSK) | 4 (16QAM) | 6 (64QAM)
     Returns power?normalized symbols (E{|d|^2}=1).
     """
@@ -37,19 +37,19 @@ def qam_modulation(bits: np.ndarray, Qm: int) -> np.ndarray:
     if bits.size % Qm:
         raise ValueError(f"len(bits) must be a multiple of Qm={Qm}")
 
-    b = bits.astype(np.int8).reshape(-1, Qm)   # Ç¿ÖÆ 0/1 ÕûÊı
+    b = bits.astype(np.int8).reshape(-1, Qm)   # å¼ºåˆ¶ 0/1 æ•´æ•°
 
     if Qm == 2:                     # QPSK
         i = 1 - 2 * b[:, 0]
         q = 1 - 2 * b[:, 1]
         norm = np.sqrt(2)
 
-    elif Qm == 4:                   # 16?QAM  (¡À1, ¡À3)
+    elif Qm == 4:                   # 16?QAM  (Â±1, Â±3)
         i = (1 - 2 * b[:, 0]) * (1 + 2 * b[:, 1])
         q = (1 - 2 * b[:, 2]) * (1 + 2 * b[:, 3])
         norm = np.sqrt(10)
 
-    else:                           # 64?QAM  (¡À1, ¡À3, ¡À5, ¡À7)
+    else:                           # 64?QAM  (Â±1, Â±3, Â±5, Â±7)
         i = (1 - 2 * b[:, 0]) * (1 + 2 * b[:, 1] + 4 * b[:, 2])
         q = (1 - 2 * b[:, 3]) * (1 + 2 * b[:, 4] + 4 * b[:, 5])
         norm = np.sqrt(42)
@@ -58,198 +58,198 @@ def qam_modulation(bits: np.ndarray, Qm: int) -> np.ndarray:
 
 
 def insert_pilots(cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """²åÈëµ¼Æµ·ûºÅ
+    """æ’å…¥å¯¼é¢‘ç¬¦å·
     
     Args:
-        data_symbols: Êı¾İ·ûºÅ
-        cfg: ÏµÍ³ÅäÖÃ²ÎÊı
+        data_symbols: æ•°æ®ç¬¦å·
+        cfg: ç³»ç»Ÿé…ç½®å‚æ•°
         
     Returns:
-        Tuple[np.ndarray, np.ndarray, np.ndarray]: (µ¼Æµ·ûºÅ, µ¼ÆµÎ»ÖÃ, Êı¾İÎ»ÖÃ)
+        Tuple[np.ndarray, np.ndarray, np.ndarray]: (å¯¼é¢‘ç¬¦å·, å¯¼é¢‘ä½ç½®, æ•°æ®ä½ç½®)
     """
-    # »ñÈ¡µ¼ÆµÎ»ÖÃºÍÊı¾İÎ»ÖÃ
+    # è·å–å¯¼é¢‘ä½ç½®å’Œæ•°æ®ä½ç½®
     pilot_indices = cfg.get_pilot_indices()
     
-    # Éú³Éµ¼Æµ·ûºÅ
+    # ç”Ÿæˆå¯¼é¢‘ç¬¦å·
     pilot_symbols = cfg.get_pilot_symbols()
     
-    # ´´½¨ÍêÕûµÄOFDM·ûºÅ
+    # åˆ›å»ºå®Œæ•´çš„OFDMç¬¦å·
     ofdm_symbol = np.zeros(cfg.n_fft, dtype=np.complex64)
     ofdm_symbol[pilot_indices] = pilot_symbols
     
     return ofdm_symbol
 
 def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """OFDM·¢ËÍ¶Ë´¦Àí
+    """OFDMå‘é€ç«¯å¤„ç†
     
     Args:
-        bits: ÊäÈë±ÈÌØÁ÷
-        cfg: ÏµÍ³ÅäÖÃ²ÎÊı
+        bits: è¾“å…¥æ¯”ç‰¹æµ
+        cfg: ç³»ç»Ÿé…ç½®å‚æ•°
         
     Returns:
-        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]: (Ê±ÓòĞÅºÅ, µ¼ÆµÎ»ÖÃ, Êı¾İÎ»ÖÃ, ÆµÓò·ûºÅ)
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]: (æ—¶åŸŸä¿¡å·, å¯¼é¢‘ä½ç½®, æ•°æ®ä½ç½®, é¢‘åŸŸç¬¦å·)
     """
-    # ÑéÖ¤ÊäÈë
+    # éªŒè¯è¾“å…¥
     total_bits = cfg.get_total_bits()
     if len(bits) != total_bits:
-        raise ValueError(f"ÊäÈë±ÈÌØÁ÷³¤¶È±ØĞëÊÇ{total_bits}")
+        raise ValueError(f"è¾“å…¥æ¯”ç‰¹æµé•¿åº¦å¿…é¡»æ˜¯{total_bits}")
     
-    # ¼ÆËãÃ¿¸öOFDM·ûºÅµÄ±ÈÌØÊı
+    # è®¡ç®—æ¯ä¸ªOFDMç¬¦å·çš„æ¯”ç‰¹æ•°
     bits_per_symbol = cfg.get_total_bits_per_symbol()
     
-    # ³õÊ¼»¯Ê±ÓòĞÅºÅÊı×éºÍÆµÓò·ûºÅÊı×é
+    # åˆå§‹åŒ–æ—¶åŸŸä¿¡å·æ•°ç»„å’Œé¢‘åŸŸç¬¦å·æ•°ç»„
     time_signal = np.array([], dtype=np.complex64)
     freq_symbols = np.zeros((cfg.num_symbols, cfg.n_fft), dtype=np.complex64)
     carrier_indices = cfg.get_subcarrier_indices()
-    # ´¦ÀíÃ¿¸öOFDM·ûºÅ
+    # å¤„ç†æ¯ä¸ªOFDMç¬¦å·
     k = 0
     for i in range(cfg.num_symbols):
-        # ¼ì²éµ±Ç°·ûºÅÊÇ·ñĞèÒª²åÈëµ¼Æµ
+        # æ£€æŸ¥å½“å‰ç¬¦å·æ˜¯å¦éœ€è¦æ’å…¥å¯¼é¢‘
         if cfg.has_pilot(i):
-            # ²åÈëµ¼Æµ
+            # æ’å…¥å¯¼é¢‘
             print(f'insert pilot at {i} symbol')
             ofdm_symbol = insert_pilots(cfg)
         else:
-            # ÌáÈ¡µ±Ç°·ûºÅµÄ±ÈÌØ
+            # æå–å½“å‰ç¬¦å·çš„æ¯”ç‰¹
             start_idx = k * bits_per_symbol
             end_idx = start_idx + bits_per_symbol
             symbol_bits = bits[start_idx:end_idx]
             
-            # QAMµ÷ÖÆ
+            # QAMè°ƒåˆ¶
             data_symbols = qam_modulation(symbol_bits, cfg.mod_order)
-            # ²»²åÈëµ¼Æµ£¬ËùÓĞ×ÓÔØ²¨¶¼ÓÃÓÚÊı¾İ´«Êä
+            # ä¸æ’å…¥å¯¼é¢‘ï¼Œæ‰€æœ‰å­è½½æ³¢éƒ½ç”¨äºæ•°æ®ä¼ è¾“
             
             ofdm_symbol = np.zeros(cfg.n_fft, dtype=np.complex64)
             ofdm_symbol[carrier_indices] = data_symbols
             k += 1
-        # ±£´æÆµÓò·ûºÅ
+        # ä¿å­˜é¢‘åŸŸç¬¦å·
         freq_symbols[i] = ofdm_symbol
         
         # IFFT
         time_symbol = np.fft.ifft(ofdm_symbol, cfg.n_fft)
         
-        # Ìí¼ÓÑ­»·Ç°×º
+        # æ·»åŠ å¾ªç¯å‰ç¼€
         cp = time_symbol[-cfg.cp_len:]
         time_symbol = np.concatenate([cp, time_symbol])
         
-        # Ìí¼Óµ½×ÜĞÅºÅ
+        # æ·»åŠ åˆ°æ€»ä¿¡å·
         time_signal = np.concatenate([time_signal, time_symbol])
     
     return time_signal, freq_symbols
 
 def plot_ofdm_symbol(ofdm_symbol: np.ndarray, pilot_indices: np.ndarray, 
-                    data_indices: np.ndarray, title: str = "OFDM·ûºÅ"):
-    """»æÖÆOFDM·ûºÅµÄĞÇ×ùÍ¼
+                    data_indices: np.ndarray, title: str = "OFDMç¬¦å·"):
+    """ç»˜åˆ¶OFDMç¬¦å·çš„æ˜Ÿåº§å›¾
     
     Args:
-        ofdm_symbol: OFDM·ûºÅ
-        pilot_indices: µ¼ÆµÎ»ÖÃ
-        data_indices: Êı¾İÎ»ÖÃ
-        title: Í¼±í±êÌâ
+        ofdm_symbol: OFDMç¬¦å·
+        pilot_indices: å¯¼é¢‘ä½ç½®
+        data_indices: æ•°æ®ä½ç½®
+        title: å›¾è¡¨æ ‡é¢˜
     """
     plt.figure(figsize=(10, 6))
     
-    # »æÖÆµ¼Æµ·ûºÅ
+    # ç»˜åˆ¶å¯¼é¢‘ç¬¦å·
     plt.scatter(ofdm_symbol[pilot_indices].real, 
                ofdm_symbol[pilot_indices].imag,
-               c='red', label='µ¼Æµ', marker='x')
+               c='red', label='å¯¼é¢‘', marker='x')
     
-    # »æÖÆÊı¾İ·ûºÅ
+    # ç»˜åˆ¶æ•°æ®ç¬¦å·
     plt.scatter(ofdm_symbol[data_indices].real,
                ofdm_symbol[data_indices].imag,
-               c='blue', label='Êı¾İ', marker='o')
+               c='blue', label='æ•°æ®', marker='o')
     
     plt.grid(True)
     plt.axis('equal')
-    plt.xlabel('Êµ²¿')
-    plt.ylabel('Ğé²¿')
+    plt.xlabel('å®éƒ¨')
+    plt.ylabel('è™šéƒ¨')
     plt.title(title)
     plt.legend()
     plt.show()
 
-def plot_ofdm_resource_grid(freq_symbols: np.ndarray, cfg: OFDMConfig, title: str = "OFDM×ÊÔ´Íø¸ñ"):
-    """»æÖÆOFDM×ÊÔ´Íø¸ñ
+def plot_ofdm_resource_grid(freq_symbols: np.ndarray, cfg: OFDMConfig, title: str = "OFDMèµ„æºç½‘æ ¼"):
+    """ç»˜åˆ¶OFDMèµ„æºç½‘æ ¼
     
     Args:
-        freq_symbols: ÆµÓò·ûºÅÊı×é [num_symbols, n_fft]
-        pilot_indices: µ¼ÆµÎ»ÖÃ
-        data_indices: Êı¾İÎ»ÖÃ
-        cfg: ÏµÍ³ÅäÖÃ²ÎÊı
-        title: Í¼±í±êÌâ
+        freq_symbols: é¢‘åŸŸç¬¦å·æ•°ç»„ [num_symbols, n_fft]
+        pilot_indices: å¯¼é¢‘ä½ç½®
+        data_indices: æ•°æ®ä½ç½®
+        cfg: ç³»ç»Ÿé…ç½®å‚æ•°
+        title: å›¾è¡¨æ ‡é¢˜
     """
     plt.figure(figsize=(12, 6))
     
-    # ´´½¨×ÊÔ´Íø¸ñÍ¼
+    # åˆ›å»ºèµ„æºç½‘æ ¼å›¾
     grid = np.zeros((freq_symbols.shape[1], freq_symbols.shape[0]))
     pilot_indices = cfg.get_pilot_indices()
     data_indices = cfg.get_data_indices()
-    # ±ê¼Çµ¼ÆµºÍÊı¾İÎ»ÖÃ
+    # æ ‡è®°å¯¼é¢‘å’Œæ•°æ®ä½ç½®
     for i in range(freq_symbols.shape[0]):
         if cfg.has_pilot(i):
-            grid[subcarrier_indices, i] = 1  # µ¼Æµ
-            # grid[data_indices, i] = 0.5  # Êı¾İ
+            grid[subcarrier_indices, i] = 1  # å¯¼é¢‘
+            # grid[data_indices, i] = 0.5  # æ•°æ®
         else:
-            # ÆäËû·ûºÅÖ»°üº¬Êı¾İ
+            # å…¶ä»–ç¬¦å·åªåŒ…å«æ•°æ®
             subcarrier_indices = cfg.get_subcarrier_indices()
             grid[subcarrier_indices, i] = 0.5
     
-    # »æÖÆ×ÊÔ´Íø¸ñ
+    # ç»˜åˆ¶èµ„æºç½‘æ ¼
     plt.imshow(grid, aspect='auto', cmap='coolwarm')
-    plt.colorbar(label='×ÊÔ´ÀàĞÍ (1:µ¼Æµ, 0.5:Êı¾İ, 0:Î´Ê¹ÓÃ)')
+    plt.colorbar(label='èµ„æºç±»å‹ (1:å¯¼é¢‘, 0.5:æ•°æ®, 0:æœªä½¿ç”¨)')
     
-    # ÉèÖÃ×ø±êÖá
-    plt.xlabel('OFDM·ûºÅË÷Òı')
-    plt.ylabel('×ÓÔØ²¨Ë÷Òı')
+    # è®¾ç½®åæ ‡è½´
+    plt.xlabel('OFDMç¬¦å·ç´¢å¼•')
+    plt.ylabel('å­è½½æ³¢ç´¢å¼•')
     plt.title(title)
     
-    # Ìí¼ÓÍ¼Àı
+    # æ·»åŠ å›¾ä¾‹
     from matplotlib.patches import Patch
     legend_elements = [
-        Patch(facecolor='red', label='µ¼Æµ'),
-        Patch(facecolor='blue', label='Î´Ê¹ÓÃ'),
-        Patch(facecolor='white', label='Êı¾İ')
+        Patch(facecolor='red', label='å¯¼é¢‘'),
+        Patch(facecolor='blue', label='æœªä½¿ç”¨'),
+        Patch(facecolor='white', label='æ•°æ®')
     ]
     plt.legend(handles=legend_elements, loc='upper right')
     
-    # Ìí¼ÓÍø¸ñÏß
+    # æ·»åŠ ç½‘æ ¼çº¿
     plt.grid(True, color='gray', linestyle='--', alpha=0.5)
     
     plt.show()
 
 if __name__ == "__main__":
-    # ´´½¨²âÊÔÅäÖÃ
+    # åˆ›å»ºæµ‹è¯•é…ç½®
     cfg = OFDMConfig(
         n_fft=4096,
         n_subcarrier=3276,
         cp_len=16,
         mod_order=4,  # 16QAM
-        num_symbols=14,  # 14¸öOFDM·ûºÅ
+        num_symbols=14,  # 14ä¸ªOFDMç¬¦å·
         pilot_pattern='comb',
-        pilot_spacing=2,  # ÆµÓò¼ä¸ô¸ÄÎª2
-        pilot_symbols=[2,11]  # Ö»ÔÚµÚ2ºÍµÚ11¸ö·ûºÅÉÏÓĞµ¼Æµ
+        pilot_spacing=2,  # é¢‘åŸŸé—´éš”æ”¹ä¸º2
+        pilot_symbols=[2,11]  # åªåœ¨ç¬¬2å’Œç¬¬11ä¸ªç¬¦å·ä¸Šæœ‰å¯¼é¢‘
     )
     
-    # Éú³ÉËæ»ú±ÈÌØÁ÷
+    # ç”Ÿæˆéšæœºæ¯”ç‰¹æµ
     np.random.seed(42)
     total_bits = cfg.get_total_bits()
     bits = np.random.randint(0, 2, size=total_bits)
     
-    # ²âÊÔÍêÕûµÄOFDM·¢ËÍ´¦Àí
-    print("\n²âÊÔOFDM·¢ËÍ´¦Àí...")
+    # æµ‹è¯•å®Œæ•´çš„OFDMå‘é€å¤„ç†
+    print("\næµ‹è¯•OFDMå‘é€å¤„ç†...")
     time_signal, freq_symbols = ofdm_tx(bits, cfg)
-    print(f"Ê±ÓòĞÅºÅ³¤¶È: {len(time_signal)}")
-    print(f"Ê±ÓòĞÅºÅ¹¦ÂÊ: {np.mean(np.abs(time_signal)**2):.3f}")
+    print(f"æ—¶åŸŸä¿¡å·é•¿åº¦: {len(time_signal)}")
+    print(f"æ—¶åŸŸä¿¡å·åŠŸç‡: {np.mean(np.abs(time_signal)**2):.3f}")
     
-    # »æÖÆÊ±ÓòĞÅºÅ
+    # ç»˜åˆ¶æ—¶åŸŸä¿¡å·
     plt.figure(figsize=(12, 4))
     plt.plot(np.abs(time_signal))
     plt.grid(True)
-    plt.xlabel('²ÉÑùµã')
-    plt.ylabel('·ù¶È')
-    plt.title('OFDMÊ±ÓòĞÅºÅ')
+    plt.xlabel('é‡‡æ ·ç‚¹')
+    plt.ylabel('å¹…åº¦')
+    plt.title('OFDMæ—¶åŸŸä¿¡å·')
     plt.show()
     
-    # »æÖÆ×ÊÔ´Íø¸ñ
+    # ç»˜åˆ¶èµ„æºç½‘æ ¼
     plot_ofdm_resource_grid(freq_symbols, cfg,
-                          "OFDM×ÊÔ´Íø¸ñ£¨ºìÉ«Îªµ¼Æµ£¬À¶É«ÎªÊı¾İ£©")
+                          "OFDMèµ„æºç½‘æ ¼ï¼ˆçº¢è‰²ä¸ºå¯¼é¢‘ï¼Œè“è‰²ä¸ºæ•°æ®ï¼‰")
     

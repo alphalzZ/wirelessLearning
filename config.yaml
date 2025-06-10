@@ -1,7 +1,14 @@
 # OFDM系统配置参数
-n_fft: 64
-cp_len: 16
+n_fft: 4096
+cp_len: 320
 mod_order: 4  # QPSK
-num_symbols: 10000
-snr_db_list: [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30]
-channel_type: "awgn"  # 可选: "awgn", "rayleigh" 
+num_symbols: 14
+snr_db: 25
+n_subcarrier: 3276
+pilot_pattern: comb
+pilot_spacing: 2
+pilot_symbols: [2,11]
+freq_offset: 0.01
+timing_offset: 100
+est_time: fft_ml  #fft_ml/diff_phase
+channel_type: 'multipath'  #awgn/multipath

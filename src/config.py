@@ -14,6 +14,7 @@ class OFDMConfig:
     """OFDM系统配置参数"""
     # Tx配置
     snr_db: float = 0
+    channel_type: str = 'awgn'         # 信道类型：'awgn'（高斯白噪声）或'multipath'（多径衰落）
     # 基本参数
     n_fft: int = 4096                    # FFT大小
     cp_len: int = 16                   # 循环前缀长度
@@ -32,7 +33,7 @@ class OFDMConfig:
     # 信道估计配置
     est_method: str = 'linear'         # 信道估计方法：'linear'（线性插值）或'ls'（最小二乘）
     equalizer: str = 'zf'              # 均衡器类型：'zf'（零强制）或'mmse'（最小均方误差）
-    
+    est_time: str = 'fft_ml'           # 定时偏移估计方法：'fft_ml'（FFT最大似然）或'diff_phase'（相位差）
     # 同步配置
     sync_method: str = 'auto'          # 同步方法：'auto'（自动）或'manual'（手动）
     freq_offset: float = 0.0           # 初始频偏估计值
