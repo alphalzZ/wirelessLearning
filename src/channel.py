@@ -42,33 +42,60 @@ def awgn_channel(signal: np.ndarray, snr_db: float) -> np.ndarray:
     
     return rx_signal
 
-def rayleigh_channel(signal: np.ndarray, snr_db: float) -> Tuple[np.ndarray, np.ndarray]:
-    """瑞利衰落信道
-    
-    Args:
-        signal: 输入信号
-        snr_db: 信噪比(dB)
-    
-    Returns:
-        Tuple[np.ndarray, np.ndarray]: (经过瑞利信道的信号, 信道响应)
+import numpy as np
+from numpy.typing import NDArray
+from typing import Optional, Tuple
+
+
+def rayleigh_channel(
+    signal: NDArray[np.complex128],
+    snr_db: float,
+    *,
+    block_fading: bool = True,
+    rng: Optional[np.random.Generator] = None,
+) -> Tuple[NDArray[np.complex128], NDArray[np.complex128]]:
     """
-    # 生成瑞利衰落信道响应
-    h = (np.random.randn(*signal.shape) + 1j * np.random.randn(*signal.shape)) / np.sqrt(2)
-    
-    # 计算信号功率
-    signal_power = np.mean(np.abs(signal) ** 2)
-    
-    # 计算噪声功率
-    noise_power = signal_power / (10 ** (snr_db / 10))
-    
-    # 生成复高斯噪声
-    noise = np.sqrt(noise_power/2) * (np.random.randn(*signal.shape) + 
-                                     1j * np.random.randn(*signal.shape))
-    
-    # 通过信道并添加噪声
+    瑞利平坦衰落 (block 或 sample‑by‑sample) + AWGN
+
+    参数
+    ----
+    signal        : (N,)  发送复基带
+    snr_db        : 目标 SNR (功率比, dB)
+    block_fading  : True  -> 整帧 1 个系数; False -> 每采样独立
+    rng           : numpy.random.Generator, 可选
+
+    返回
+    ----
+    rx_signal     : (N,)  接收信号
+    h             : (1,) 或 (N,) 信道复增益
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    # 1) 生成瑞利系数：CN(0,1) / sqrt(2)，功率均值 = 1
+    if block_fading:
+        h = (rng.standard_normal() + 1j * rng.standard_normal()) / np.sqrt(2)
+    else:  # independent fast fading
+        h = (rng.standard_normal(signal.shape) + 1j * rng.standard_normal(signal.shape)) / np.sqrt(2)
+
+    # 2) 计算噪声方差：Es/N0 (发射功率参考)
+    sig_power = np.mean(np.abs(signal) ** 2)          # 发射端平均功率
+    snr_lin   = 10.0 ** (snr_db / 10.0)
+    noise_var = sig_power / snr_lin                   # 复噪声单样本功率
+    noise_std = np.sqrt(noise_var / 2.0)              # (实/虚) 分量方差
+
+    noise = noise_std * (rng.standard_normal(signal.shape) +
+                         1j * rng.standard_normal(signal.shape))
+
+    # 3) 通过信道 + 加噪
     rx_signal = h * signal + noise
-    
-    return rx_signal, h
+
+    # reshape h 为 (N,) 方便后续逐样本处理；block_fading 时重复填充
+    if block_fading:
+        h = np.full_like(signal, h, dtype=np.complex128)
+
+    return rx_signal.astype(np.complex128), h.astype(np.complex128)
+
 
 def multipath_channel(
     signal: NDArray[np.complex128],

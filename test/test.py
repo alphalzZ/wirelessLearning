@@ -71,6 +71,8 @@ class TestOFDMSystem(unittest.TestCase):
             rx_signal,h_channel = multipath_channel(tx_signal, self.cfg.snr_db)   
         elif self.cfg.channel_type == 'awgn':
             rx_signal = awgn_channel(tx_signal, self.cfg.snr_db)
+        elif self.cfg.channel_type == 'rayleigh':
+            rx_signal,h_channel = rayleigh_channel(tx_signal, self.cfg.snr_db)
         else:
             raise ValueError(f"不支持的信道类型: {self.cfg.channel_type}")
         phase_rotation = 2 * np.pi * self.cfg.freq_offset * np.arange(len(rx_signal)) / self.cfg.n_fft
