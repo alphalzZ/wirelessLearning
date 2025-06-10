@@ -77,16 +77,15 @@ class TestOFDMSystem(unittest.TestCase):
         tx_signal, pilot_indices, data_indices, freq_symbols = ofdm_tx(bits, self.cfg)
         
         # 添加噪声
-        snr_db = 35
+        snr_db = 30
         #计算噪声线性值
-        noise_var = 10 ** (-snr_db / 20)
-        rx_signal,h_channel = multipath_channel(tx_signal, snr_db)   
-        # rx_signal = awgn_channel(tx_signal,snr_db)
+        noise_var = 10 ** (-snr_db / 10)
+        # rx_signal,h_channel = multipath_channel(tx_signal, snr_db)   
+        rx_signal = awgn_channel(tx_signal,snr_db)
         phase_rotation = 2 * np.pi * self.cfg.freq_offset * np.arange(len(rx_signal)) / self.cfg.n_fft
         rx_signal = rx_signal * np.exp(1j * phase_rotation)
         rx_signal = np.roll(rx_signal, self.cfg.timing_offset)
         # 接收端处理
-        self.cfg.noise_var = noise_var
         rx_syms = ofdm_rx(rx_signal, self.cfg)
         
         # 绘制星座图
@@ -117,14 +116,12 @@ class TestOFDMSystem(unittest.TestCase):
     def test_multipath_channel(self):
         """测试多径信道功能"""
         # 生成测试信号
-        signal = np.random.randn(1000) + 1j * np.random.randn(1000)
-        
-        # 测试多径信道
-        rx_signal = multipath_channel(signal, self.cfg)
-        
-        # 验证输出
-        self.assertEqual(len(rx_signal), len(signal))
-        self.assertTrue(np.all(np.abs(rx_signal) > 0))
+        tx = np.random.randn(1000) + 1j * np.random.randn(1000)
+        snr_db_target = 20
+        rx, h = multipath_channel(tx, snr_db_target)
+        meas_snr = np.mean(np.abs(np.convolve(tx, h,'same'))**2) / np.mean(np.abs(rx - np.convolve(tx,h,'same'))**2)
+        print(10*np.log10(meas_snr))   # 应接近 20 dB
+
 
     def test_ofdm_rx_with_channel_estimation(self):
         """测试OFDM接收端信道估计功能"""

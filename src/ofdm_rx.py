@@ -92,7 +92,7 @@ def compensate_frequency_offset(
     两种场景：
     1. `signal.ndim == 1` —— 时域序列（含或不含 CP），对每个采样直接旋转；
     2. `signal.ndim == 2` —— 去 CP + FFT 后的 **频域帧矩阵**，
-       视 CFO 仅造成“公共相位误差 (CPE)”，对每个 OFDM 符号整行旋转。
+       视 CFO 仅造成"公共相位误差 (CPE)"，对每个 OFDM 符号整行旋转。
 
     参数
     ----
@@ -100,7 +100,7 @@ def compensate_frequency_offset(
         • 时域: shape (Ns,)                    — 复基带采样  
         • 频域: shape (Nsym, Nfft)             — 每行 1 个 OFDM 符号
     freq_offset : float
-        归一化 CFO (单位：子载波间隔，范围约 -0.5 ~ 0.5)  
+        归一化 CFO (单位：子载波间隔，范围约 -0.5 ~ 0.5)  
         正值表示接收端载波 **低** 于发送端
     cfg         : OFDMConfig
         提供 `n_fft`, `cp_len`
@@ -119,7 +119,7 @@ def compensate_frequency_offset(
         if n_fft != cfg.n_fft:
             raise ValueError("signal.shape[1] 与 cfg.n_fft 不一致")
 
-        # 每个 OFDM 符号对应的时域“参考采样”索引:
+        # 每个 OFDM 符号对应的时域"参考采样"索引:
         # 起始点位于 CP 尾端 → n0 = Ncp + m·(N+Ncp)
         sample_idx = cfg.cp_len + np.arange(n_sym) * (cfg.n_fft + cfg.cp_len)
 
@@ -272,6 +272,35 @@ def estimate_channel(rx_symbols: np.ndarray, cfg: OFDMConfig, pilot_symbols: np.
     
     return h_est_interp
 
+def noise_var_estimate(rx_symbols: np.ndarray, Hest: np.ndarray, cfg: OFDMConfig) -> float:
+    """噪声方差估计
+    使用真实发送的导频和用信道估计恢复的导频的残差估计噪声方差
+    Args:
+        rx_symbols: 接收符号
+        Hest: 信道估计结果，包含所有ofdm符号的信道估计
+        cfg: 系统配置参数
+    Returns:
+        float: 估计的噪声方差
+    """
+    pilot_symbols = cfg.get_pilot_symbols()
+    pilot_indices = cfg.get_pilot_indices()
+    pilot_symbols_indice = cfg.get_pilot_symbol_indices()
+    
+    # 使用循环方式计算每个导频符号的噪声方差
+    total_noise = 0
+    for i, sym_idx in enumerate(pilot_symbols_indice):
+        # 获取当前导频符号位置上的接收符号
+        rx_pilot = rx_symbols[sym_idx, pilot_indices]
+        # 获取当前导频符号位置上的信道估计值
+        h_est = Hest[sym_idx, pilot_indices]
+        # 计算与真实导频符号的差异
+        rx_pilot_est = h_est*pilot_symbols
+        diff = rx_pilot - rx_pilot_est
+        # 累加噪声方差
+        total_noise += np.mean(np.abs(diff) ** 2)
+    
+    # 返回平均噪声方差
+    return total_noise / len(pilot_symbols_indice)
 
 def channel_equalization(
     rx_symbols: NDArray[np.complex128],
@@ -378,8 +407,10 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     # rx_symbols_freq_compensation = remove_cp_and_fft(rx_symbols_freq_compensation, cfg)
     # 3. 信道估计和均衡
     h_est = estimate_channel(rx_symbols_freq_compensation, cfg)
+    noise_var = noise_var_estimate(rx_symbols_freq_compensation, h_est, cfg)
+    print(f"估计的SINR: {10*np.log10(1/noise_var)-6 :.2f} dB")
     #信道均衡
-    rx_symbols_equalized = channel_equalization(rx_symbols_freq_compensation, h_est, cfg.noise_var)
+    rx_symbols_equalized = channel_equalization(rx_symbols_freq_compensation, h_est, noise_var)
     
     # 4. 解调（这里需要实现QAM解调）
     # TODO: 实现QAM解调
