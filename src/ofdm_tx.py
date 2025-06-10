@@ -107,7 +107,8 @@ def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray, 
         # 检查当前符号是否需要插入导频
         if cfg.has_pilot(i):
             # 插入导频
-            print(f'insert pilot at {i} symbol')
+            if cfg.display_est_result:
+                print(f'insert pilot at {i} symbol')
             ofdm_symbol = insert_pilots(cfg)
         else:
             # 提取当前符号的比特

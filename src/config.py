@@ -15,6 +15,7 @@ class OFDMConfig:
     # Tx配置
     snr_db: float = 0
     channel_type: str = 'awgn'         # 信道类型：'awgn'（高斯白噪声）或'multipath'（多径衰落）
+    display_est_result: bool = False    # 是否显示信道估计结果
     # 基本参数
     n_fft: int = 4096                    # FFT大小
     cp_len: int = 16                   # 循环前缀长度

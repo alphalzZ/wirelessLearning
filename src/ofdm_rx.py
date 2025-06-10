@@ -518,7 +518,8 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     est_timing = estimate_timing_offset(rx_symbols, pilot_symbols, pilot_indices, cfg)
     # 频偏补偿
     est_freq_offset = estimate_frequency_offset(rx_symbols, pilot_symbols, pilot_indices, cfg)
-    print(f"估计的时延: {est_timing}, 估计的频偏: {est_freq_offset}")
+    if cfg.display_est_result:
+        print(f"估计的时延: {est_timing}, 估计的频偏: {est_freq_offset}")
     rx_symbols_freq_compensation = compensate_frequency_offset(signal, est_freq_offset, cfg)
     # 时延补偿
     # signal_timing = np.roll(signal,est_timing)
@@ -532,7 +533,8 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     # 3. 信道估计和均衡
     h_est = estimate_channel(signal_timing, cfg, pilot_symbols, pilot_indices)
     noise_var, RxPower = noise_var_estimate(signal_timing, h_est, cfg,pilot_symbols, pilot_indices)
-    print(f"估计的SINR: {10*np.log10(RxPower/noise_var) :.2f} dB")
+    if cfg.display_est_result:
+        print(f"估计的SINR: {10*np.log10(RxPower/noise_var) :.2f} dB")
     #信道均衡
     rx_symbols_equalized = channel_equalization(signal_timing, h_est, noise_var)
     
