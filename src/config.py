@@ -35,7 +35,7 @@ class OFDMConfig:
     est_method: str = 'linear'         # 信道估计方法：'linear'（线性插值）或'ls'（最小二乘）
     interp_method: str = 'linear'      # 信道插值方式：'linear'或'nearest'
     equalizer: str = 'zf'              # 均衡器类型：'zf'（零强制）或'mmse'（最小均方误差）
-    est_time: str = 'fft_ml'           # 定时偏移估计方法：'fft_ml'（FFT最大似然）或'diff_phase'（相位差）
+    est_time: str = 'fft_ml'           # 定时偏移估计方法：'fft_ml'（FFT最大似然）/'diff_phase'（相位差）或'ml_then_phase'（两步法）
     # 同步配置
     sync_method: str = 'auto'          # 同步方法：'auto'（自动）或'manual'（手动）
     freq_offset: float = 0.0           # 初始频偏估计值

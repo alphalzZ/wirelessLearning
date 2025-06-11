@@ -10,7 +10,7 @@ pilot_spacing: 2
 pilot_symbols: [1,12]
 freq_offset: 0.02
 timing_offset: 100
-est_time: fft_ml  #fft_ml/diff_phase
+est_time: fft_ml  #fft_ml/diff_phase/ml_then_phase
 channel_type: awgn  #awgn/multipath/rayleigh
 display_est_result: true
 interp_method: linear  # linear or nearest

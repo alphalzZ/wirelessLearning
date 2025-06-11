@@ -136,6 +136,35 @@ def compensate_frequency_offset(
     else:
         raise ValueError("signal 维度既不是 1 也不是 2，无法补偿")
 
+def compensate_timing_offset(
+    rx_symbols: NDArray[np.complex128],
+    timing_offset: float,
+    cfg: "OFDMConfig",
+) -> NDArray[np.complex128]:
+    """符号级时延补偿
+
+    在频域对每个子载波施加与时延相关的相位旋转。
+
+    参数
+    ----
+    rx_symbols : ndarray, shape (Nsym, Nsub)
+        去 CP 并 FFT 后的频域符号矩阵
+    timing_offset : float
+        估计的时延（采样数）
+    cfg : OFDMConfig
+        提供 ``n_fft`` 与 ``n_subcarrier`` 等参数
+
+    返回
+    ----
+    compensated : ndarray，与 ``rx_symbols`` 同形状
+    """
+
+    k = np.arange(cfg.n_subcarrier)
+    phase = np.exp(-1j * 2 * np.pi * timing_offset * k / cfg.n_fft).astype(
+        rx_symbols.dtype
+    )
+    return rx_symbols * phase[None, :]
+
 def estimate_timing_offset_diff_phase(rx_symbols: np.ndarray, pilot_symbols: np.ndarray, 
                          pilot_indices: np.ndarray, cfg: OFDMConfig) -> int:
     """使用导频符号估计符号定时偏移
@@ -243,7 +272,7 @@ def estimate_timing_offset_fft_ml(rx_symbols: np.ndarray, pilot_symbols: np.ndar
     
     # 返回平均定时偏移
     return np.mean(timing_offsets) * cfg.n_fft / cfg.pilot_spacing
-def estimate_timing_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray, 
+def estimate_timing_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray,
                          pilot_indices: np.ndarray, cfg: OFDMConfig) -> int:
     """估计符号定时偏移
     """
@@ -251,6 +280,11 @@ def estimate_timing_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray,
         return estimate_timing_offset_fft_ml(rx_symbols, pilot_symbols, pilot_indices, cfg)
     elif cfg.est_time == 'diff_phase':
         return estimate_timing_offset_diff_phase(rx_symbols, pilot_symbols, pilot_indices, cfg)
+    elif cfg.est_time == 'ml_then_phase':
+        coarse = estimate_timing_offset_fft_ml(rx_symbols, pilot_symbols, pilot_indices, cfg)
+        compensated = compensate_timing_offset(rx_symbols, coarse, cfg)
+        fine = estimate_timing_offset_diff_phase(compensated, pilot_symbols, pilot_indices, cfg)
+        return coarse + fine
     else:
         raise ValueError("不支持的定时偏移估计方法")
 
