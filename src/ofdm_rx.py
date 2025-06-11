@@ -330,24 +330,30 @@ def estimate_channel(rx_symbols: np.ndarray, cfg: OFDMConfig, pilot_symbols: np.
             # 使用实际窗口大小进行平均
             h_est_smooth[i, j] = np.mean(h_est[i, start:end])
     # 对h_est在每个子载波维度进行插值
-    h_est_interp = np.zeros((cfg.num_symbols, cfg.n_subcarrier), dtype=np.complex64)
-    for i in range(cfg.n_subcarrier):
-        # 分别对实部和虚部进行插值
-        real_interp = np.interp(np.arange(cfg.num_symbols), 
-                              pilot_symbol_indices, 
-                              h_est_smooth[:, i].real,
-                              left=h_est_smooth[0, i].real,
-                              right=h_est_smooth[-1, i].real)
-        
-        imag_interp = np.interp(np.arange(cfg.num_symbols), 
-                              pilot_symbol_indices, 
-                              h_est_smooth[:, i].imag,
-                              left=h_est_smooth[0, i].imag,
-                              right=h_est_smooth[-1, i].imag)
-        
-        # 组合实部和虚部
-        h_est_interp[:, i] = real_interp + 1j * imag_interp
-    
+    symbol_range = np.arange(cfg.num_symbols)
+    if cfg.interp_method == 'nearest':
+        # 最近邻插值：一次性计算所有子载波
+        diff = np.abs(symbol_range[:, None] - pilot_symbol_indices[None, :])
+        nearest_idx = diff.argmin(axis=1)
+        h_est_interp = h_est_smooth[nearest_idx]
+    else:
+        # 线性插值：向量化处理
+        left_idx = np.searchsorted(pilot_symbol_indices, symbol_range, side="right") - 1
+        right_idx = left_idx + 1
+        left_idx = np.clip(left_idx, 0, len(pilot_symbol_indices) - 1)
+        right_idx = np.clip(right_idx, 0, len(pilot_symbol_indices) - 1)
+
+        left_pos = pilot_symbol_indices[left_idx]
+        right_pos = pilot_symbol_indices[right_idx]
+        denom = right_pos - left_pos
+        denom[denom == 0] = 1
+        alpha = ((symbol_range - left_pos) / denom)[:, None]
+
+        h_left = h_est_smooth[left_idx]
+        h_right = h_est_smooth[right_idx]
+
+        h_est_interp = (1 - alpha) * h_left + alpha * h_right
+
     return h_est_interp
 
 def noise_var_estimate(rx_symbols: np.ndarray, Hest: np.ndarray, cfg: OFDMConfig, pilot_symbols=None, pilot_indices=None) -> float:

@@ -31,6 +31,7 @@ class OFDMConfig:
     
     # 信道估计配置
     est_method: str = 'linear'         # 信道估计方法：'linear'（线性插值）或'ls'（最小二乘）
+    interp_method: str = 'linear'      # 信道插值方式：'linear'或'nearest'
     equalizer: str = 'zf'              # 均衡器类型：'zf'（零强制）或'mmse'（最小均方误差）
     
     # 同步配置
@@ -70,6 +71,8 @@ class OFDMConfig:
         # 验证信道估计配置
         if self.est_method not in ['linear', 'ls']:
             raise ValueError("信道估计方法必须是'linear'或'ls'")
+        if self.interp_method not in ['linear', 'nearest']:
+            raise ValueError("插值方式必须是'linear'或'nearest'")
         if self.equalizer not in ['zf', 'mmse']:
             raise ValueError("均衡器类型必须是'zf'或'mmse'")
             
