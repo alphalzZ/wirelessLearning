@@ -79,7 +79,7 @@ def insert_pilots(cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     
     return ofdm_symbol
 
-def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
     """OFDM发送端处理
     
     Args:
@@ -87,7 +87,7 @@ def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray, 
         cfg: 系统配置参数
         
     Returns:
-        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]: (时域信号, 导频位置, 数据位置, 频域符号)
+        Tuple[np.ndarray, np.ndarray]: (时域信号, 频域符号)
     """
     # 验证输入
     total_bits = cfg.get_total_bits()
