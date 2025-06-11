@@ -65,7 +65,7 @@ def main():
     cfg = load_config(config_path)
     snr_db_list = np.arange(0, 31, 2)
     num_trials = 200  # 每个SNR点的仿真次数
-    to_methods = ['fft_ml', 'diff_phase']
+    to_methods = ['fft_ml', 'diff_phase', 'ml_then_phase']
     
     # 创建结果目录
     results_dir = Path(__file__).parent.parent / "results"
