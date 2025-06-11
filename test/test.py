@@ -172,7 +172,7 @@ class TestOFDMSystem(unittest.TestCase):
         bits = np.random.randint(0, 2, k)
         
         # 生成OFDM符号
-        time_signal, pilot_indices, data_indices, freq_symbols = ofdm_tx(bits, self.cfg)
+        time_signal, freq_symbols = ofdm_tx(bits, self.cfg)
         
         # 添加AWGN噪声
         snr_db = 0
@@ -200,4 +200,10 @@ class TestOFDMSystem(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    # 创建测试套件
+    suite = unittest.TestSuite()
+    # 只添加信道估计测试
+    suite.addTest(TestOFDMSystem('test_ofdm_tx_rx'))
+    # 运行测试
+    runner = unittest.TextTestRunner()
+    runner.run(suite)

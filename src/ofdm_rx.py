@@ -330,11 +330,6 @@ def estimate_channel(
     # 计算每个导频位置的信道响应，使用共轭相乘
     h_pilot = rx_pilots * np.conj(pilot_symbols_pad)
     
-    # 如果pilot_symbols_pad不为0，则将h_pilot的值除以pilot_symbols_pad模的平方
-    # for i in range(len(pilot_symbol_indices)):
-    #     idx = np.abs(pilot_symbols_pad) != 0
-    #     h_pilot[i, idx] = h_pilot[i, idx] / np.abs(pilot_symbols_pad[idx]) ** 2
-    
     #非导频位置的信道响应为其相邻导频位置的信道响应的平均
     h_est = np.zeros((len(pilot_symbol_indices), cfg.n_subcarrier), dtype=np.complex64)
     for i in range(cfg.n_subcarrier):
