@@ -69,9 +69,16 @@ class TestOFDMSystem(unittest.TestCase):
         # 添加噪声
         # rx_signal,h_channel = multipath_channel(tx_signal, self.cfg.snr_db)   
         rx_signal = awgn_channel(tx_signal, self.cfg.snr_db)
-        phase_rotation = 2 * np.pi * self.cfg.freq_offset * np.arange(len(rx_signal)) / self.cfg.n_fft
-        rx_signal = rx_signal * np.exp(1j * phase_rotation)
-        rx_signal = np.roll(rx_signal, self.cfg.timing_offset)
+        time_len = rx_signal.shape[-1]
+        phase_rotation = (
+            2 * np.pi * self.cfg.freq_offset * np.arange(time_len) / self.cfg.n_fft
+        )
+        if rx_signal.ndim == 1:
+            rx_signal = rx_signal * np.exp(1j * phase_rotation)
+            rx_signal = np.roll(rx_signal, self.cfg.timing_offset)
+        else:
+            rx_signal = rx_signal * np.exp(1j * phase_rotation)[None, :]
+            rx_signal = np.roll(rx_signal, self.cfg.timing_offset, axis=-1)
         # 接收端处理
         rx_syms, rx_bits = ofdm_rx(rx_signal, self.cfg)
         # 计算误码率
