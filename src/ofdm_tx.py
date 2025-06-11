@@ -28,9 +28,9 @@ import numpy as np
 
 def qam_modulation(bits: np.ndarray, Qm: int) -> np.ndarray:
     """
-    5G?NR Gray?coded QAM (38.211?§5.1)
+    5G NR Gray-coded QAM (38.211 §5.1)
     Qm = 2 (QPSK) | 4 (16QAM) | 6 (64QAM)
-    Returns power?normalized symbols (E{|d|^2}=1).
+    Returns power-normalized symbols (E{|d|^2}=1).
     """
     if Qm not in (2, 4, 6):
         raise ValueError("Qm must be 2, 4 or 6")
@@ -44,12 +44,12 @@ def qam_modulation(bits: np.ndarray, Qm: int) -> np.ndarray:
         q = 1 - 2 * b[:, 1]
         norm = np.sqrt(2)
 
-    elif Qm == 4:                   # 16?QAM  (±1, ±3)
+    elif Qm == 4:                   # 16-QAM  (±1, ±3)
         i = (1 - 2 * b[:, 0]) * (1 + 2 * b[:, 1])
         q = (1 - 2 * b[:, 2]) * (1 + 2 * b[:, 3])
         norm = np.sqrt(10)
 
-    else:                           # 64?QAM  (±1, ±3, ±5, ±7)
+    else:                           # 64-QAM  (±1, ±3, ±5, ±7)
         i = (1 - 2 * b[:, 0]) * (1 + 2 * b[:, 1] + 4 * b[:, 2])
         q = (1 - 2 * b[:, 3]) * (1 + 2 * b[:, 4] + 4 * b[:, 5])
         norm = np.sqrt(42)
