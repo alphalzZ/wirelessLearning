@@ -184,6 +184,7 @@ def plot_ofdm_resource_grid(freq_symbols: np.ndarray, cfg: OFDMConfig, title: st
     grid = np.zeros((freq_symbols.shape[1], freq_symbols.shape[0]))
     pilot_indices = cfg.get_pilot_indices()
     data_indices = cfg.get_data_indices()
+    subcarrier_indices = cfg.get_subcarrier_indices()
     # 标记导频和数据位置
     for i in range(freq_symbols.shape[0]):
         if cfg.has_pilot(i):
@@ -191,7 +192,6 @@ def plot_ofdm_resource_grid(freq_symbols: np.ndarray, cfg: OFDMConfig, title: st
             # grid[data_indices, i] = 0.5  # 数据
         else:
             # 其他符号只包含数据
-            subcarrier_indices = cfg.get_subcarrier_indices()
             grid[subcarrier_indices, i] = 0.5
     
     # 绘制资源网格
