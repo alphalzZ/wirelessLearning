@@ -7,9 +7,9 @@ snr_db: 15
 n_subcarrier: 3276
 pilot_pattern: comb
 pilot_spacing: 2
-pilot_symbols: [0,13]
+pilot_symbols: [1,12]
 freq_offset: 0.02
 timing_offset: 100
-est_time: diff_phase  #fft_ml/diff_phase
-channel_type: rayleigh  #awgn/multipath/rayleigh
+est_time: fft_ml  #fft_ml/diff_phase
+channel_type: awgn  #awgn/multipath/rayleigh
 display_est_result: true

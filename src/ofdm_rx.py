@@ -182,7 +182,7 @@ def estimate_timing_offset_diff_phase(rx_symbols: np.ndarray, pilot_symbols: np.
     return timing_offset
 
 def estimate_timing_offset_fft_ml(rx_symbols: np.ndarray, pilot_symbols: np.ndarray, 
-                                 pilot_indices: np.ndarray, cfg: OFDMConfig, ml_fft_size: int = 512) -> float:
+                                 pilot_indices: np.ndarray, cfg: OFDMConfig, ml_fft_size: int = 1024) -> float:
     """使用FFT最大似然估计符号定时偏移
     
     Args:
@@ -195,13 +195,11 @@ def estimate_timing_offset_fft_ml(rx_symbols: np.ndarray, pilot_symbols: np.ndar
         int: 估计的定时偏移量
     """
     # 提取导频位置的接收信号
-    rx_pilots = np.zeros((len(cfg.pilot_symbols), cfg.n_subcarrier), dtype=rx_symbols.dtype)
+    rx_pilots = np.zeros((len(cfg.pilot_symbols), len(pilot_indices)), dtype=rx_symbols.dtype)
     for i, sym_idx in enumerate(cfg.pilot_symbols):
-        rx_pilots[i, :] = rx_symbols[sym_idx, :]
-    pilot_symbols_pad = np.zeros(cfg.n_subcarrier, dtype=np.complex64)
-    pilot_symbols_pad[pilot_indices] = pilot_symbols
+        rx_pilots[i, :] = rx_symbols[sym_idx, pilot_indices]
     # 使用广播机制提取数据
-    h_pilot = rx_pilots * np.conj(pilot_symbols_pad)
+    h_pilot = rx_pilots / pilot_symbols
     
     # 初始化定时偏移数组
     timing_offsets = []
@@ -244,7 +242,7 @@ def estimate_timing_offset_fft_ml(rx_symbols: np.ndarray, pilot_symbols: np.ndar
         timing_offsets.append(timing_offset)
     
     # 返回平均定时偏移
-    return np.mean(timing_offsets) * cfg.n_fft
+    return np.mean(timing_offsets) * cfg.n_fft / cfg.pilot_spacing
 def estimate_timing_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray, 
                          pilot_indices: np.ndarray, cfg: OFDMConfig) -> int:
     """估计符号定时偏移
