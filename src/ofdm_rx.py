@@ -288,8 +288,12 @@ def estimate_timing_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray,
     else:
         raise ValueError("不支持的定时偏移估计方法")
 
-def estimate_channel(rx_symbols: np.ndarray, cfg: OFDMConfig, pilot_symbols: np.ndarray = None, 
-                    pilot_indices: np.ndarray = None) -> np.ndarray:
+def estimate_channel(
+    rx_symbols: np.ndarray,
+    cfg: OFDMConfig,
+    pilot_symbols: np.ndarray | None = None,
+    pilot_indices: np.ndarray | None = None,
+) -> np.ndarray:
     """信道估计
     
     Args:
@@ -301,6 +305,13 @@ def estimate_channel(rx_symbols: np.ndarray, cfg: OFDMConfig, pilot_symbols: np.
     Returns:
         估计的信道响应
     """
+    if rx_symbols.ndim == 3:
+        est = [
+            estimate_channel(rs, cfg, pilot_symbols, pilot_indices)
+            for rs in rx_symbols
+        ]
+        return np.stack(est, axis=0)
+
     if pilot_symbols is None or pilot_indices is None:
         pilot_symbols = cfg.get_pilot_symbols()
         pilot_indices = cfg.get_pilot_indices()
@@ -390,7 +401,13 @@ def estimate_channel(rx_symbols: np.ndarray, cfg: OFDMConfig, pilot_symbols: np.
 
     return h_est_interp
 
-def noise_var_estimate(rx_symbols: np.ndarray, Hest: np.ndarray, cfg: OFDMConfig, pilot_symbols=None, pilot_indices=None) -> float:
+def noise_var_estimate(
+    rx_symbols: np.ndarray,
+    Hest: np.ndarray,
+    cfg: OFDMConfig,
+    pilot_symbols=None,
+    pilot_indices=None,
+) -> float:
     """噪声方差估计
     使用真实发送的导频和用信道估计恢复的导频的残差估计噪声方差
     Args:
@@ -406,21 +423,24 @@ def noise_var_estimate(rx_symbols: np.ndarray, Hest: np.ndarray, cfg: OFDMConfig
     pilot_symbol_indices = cfg.get_pilot_symbol_indices()
     
     # 使用循环方式计算每个导频符号的噪声方差
+    if rx_symbols.ndim == 3:
+        est = [
+            noise_var_estimate(rs, hs, cfg, pilot_symbols, pilot_indices)
+            for rs, hs in zip(rx_symbols, Hest)
+        ]
+        noise = np.mean([n for n, _ in est])
+        power = np.mean([p for _, p in est])
+        return noise, power
+
     total_noise = 0
     total_rx = 0
     for i, sym_idx in enumerate(pilot_symbol_indices):
-        # 获取当前导频符号位置上的接收符号
         rx_pilot = rx_symbols[sym_idx, pilot_indices]
-        # 获取当前导频符号位置上的信道估计值
         h_est = Hest[sym_idx, pilot_indices]
-        # 计算与真实导频符号的差异
-        rx_pilot_est = h_est*pilot_symbols
+        rx_pilot_est = h_est * pilot_symbols
         diff = rx_pilot - rx_pilot_est
-        # 累加噪声方差
         total_noise += np.mean(np.abs(diff) ** 2)
-        # 累加信号功率
         total_rx += np.mean(np.abs(rx_pilot_est) ** 2)
-    # 返回平均噪声方差
     return total_noise / len(pilot_symbol_indices), total_rx / len(pilot_symbol_indices)
 
 def channel_equalization(
@@ -475,25 +495,31 @@ def remove_cp_and_fft(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     Returns:
         频域符号，形状为(num_symbols, n_fft)
     """
-    # 计算符号长度（包括CP）
     symbol_len = cfg.n_fft + cfg.cp_len
-    
-    # 计算符号数量
-    num_symbols = len(signal) // symbol_len
-    
-    # 初始化频域符号数组
-    rx_symbols = np.zeros((num_symbols, cfg.n_fft), dtype=np.complex64)
     subcarrier_indices = cfg.get_subcarrier_indices()
-    for i in range(num_symbols):
-        # 提取当前符号（去除CP）
-        start_idx = i * symbol_len + cfg.cp_len
-        end_idx = start_idx + cfg.n_fft
-        time_symbol = signal[start_idx:end_idx]
-        
-        # FFT
-        rx_symbols[i] = np.fft.fft(time_symbol, cfg.n_fft)
-    
-    return rx_symbols[:,subcarrier_indices]
+
+    if signal.ndim == 1:
+        num_symbols = len(signal) // symbol_len
+        rx_symbols = np.zeros((num_symbols, cfg.n_fft), dtype=np.complex64)
+        for i in range(num_symbols):
+            start_idx = i * symbol_len + cfg.cp_len
+            end_idx = start_idx + cfg.n_fft
+            time_symbol = signal[start_idx:end_idx]
+            rx_symbols[i] = np.fft.fft(time_symbol, cfg.n_fft)
+        return rx_symbols[:, subcarrier_indices]
+    elif signal.ndim == 2:
+        num_ant, total_len = signal.shape
+        num_symbols = total_len // symbol_len
+        rx_symbols = np.zeros((num_ant, num_symbols, cfg.n_fft), dtype=np.complex64)
+        for ant in range(num_ant):
+            for i in range(num_symbols):
+                start_idx = i * symbol_len + cfg.cp_len
+                end_idx = start_idx + cfg.n_fft
+                time_symbol = signal[ant, start_idx:end_idx]
+                rx_symbols[ant, i] = np.fft.fft(time_symbol, cfg.n_fft)
+        return rx_symbols[..., subcarrier_indices]
+    else:
+        raise ValueError("signal维度必须为1或2")
 
 def qam_demodulation(symbols: np.ndarray, Qm: int) -> np.ndarray:
     """
@@ -546,6 +572,11 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     Returns:
         解调后的比特流
     """
+    if signal.ndim == 1:
+        signal = signal[None, :]
+
+    num_ant = signal.shape[0]
+
     # 1. 移除循环前缀并进行FFT
     rx_symbols = remove_cp_and_fft(signal, cfg)
     
@@ -553,35 +584,37 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     offset = cfg.get_subcarrier_offset()
     pilot_symbols = cfg.get_pilot_symbols()
     pilot_indices = cfg.get_pilot_indices() - offset
-    est_timing = estimate_timing_offset(rx_symbols, pilot_symbols, pilot_indices, cfg)
-    # 频偏补偿
-    est_freq_offset = estimate_frequency_offset(rx_symbols, pilot_symbols, pilot_indices, cfg)
+    est_timing = estimate_timing_offset(rx_symbols[0], pilot_symbols, pilot_indices, cfg)
+    est_freq_offset = estimate_frequency_offset(rx_symbols[0], pilot_symbols, pilot_indices, cfg)
     if cfg.display_est_result:
         print(f"估计的时延: {est_timing}, 估计的频偏: {est_freq_offset}")
-    rx_symbols_freq_compensation = compensate_frequency_offset(signal, est_freq_offset, cfg)
+    rx_symbols_freq_compensation = np.stack(
+        [compensate_frequency_offset(signal[a], est_freq_offset, cfg) for a in range(num_ant)],
+        axis=0,
+    )
     # 时延补偿
     # signal_timing = np.roll(signal,est_timing)
     rx_symbols = remove_cp_and_fft(rx_symbols_freq_compensation, cfg)
-    signal_timing = np.zeros_like(rx_symbols)
-    for i in range(signal_timing.shape[0]):
-        # 补偿相位旋转
-        phase_compensation = np.exp(-1j * 2 * np.pi *est_timing * np.arange(cfg.n_subcarrier) / cfg.n_fft)
-        signal_timing[i] = rx_symbols[i] * phase_compensation
+    phase_compensation = np.exp(
+        -1j * 2 * np.pi * est_timing * np.arange(cfg.n_subcarrier) / cfg.n_fft
+    )
+    signal_timing = rx_symbols * phase_compensation[None, None, :]
     # rx_symbols_freq_compensation = remove_cp_and_fft(rx_symbols_freq_compensation, cfg)
     # 3. 信道估计和均衡
     h_est = estimate_channel(signal_timing, cfg, pilot_symbols, pilot_indices)
-    noise_var, RxPower = noise_var_estimate(signal_timing, h_est, cfg,pilot_symbols, pilot_indices)
+    noise_var, RxPower = noise_var_estimate(signal_timing, h_est, cfg, pilot_symbols, pilot_indices)
     if cfg.display_est_result:
         print(f"估计的SINR: {10*np.log10(RxPower/noise_var) :.2f} dB")
     #信道均衡
     rx_symbols_equalized = channel_equalization(signal_timing, h_est, noise_var)
+    rx_combined = np.mean(rx_symbols_equalized, axis=0)
     
     # 4. 解调（这里需要实现QAM解调）
     # TODO: 实现QAM解调
     data_symbol_indices = cfg.get_data_symbol_indices()
-    bits_rx = qam_demodulation(rx_symbols_equalized[data_symbol_indices], cfg.mod_order)
-    
-    return rx_symbols_equalized, bits_rx
+    bits_rx = qam_demodulation(rx_combined[data_symbol_indices], cfg.mod_order)
+
+    return rx_combined, bits_rx
 
 if __name__ == "__main__":
     # 创建测试配置

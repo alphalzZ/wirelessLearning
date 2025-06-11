@@ -17,7 +17,7 @@ if project_root not in sys.path:
 
 from src.config import OFDMConfig
 
-def awgn_channel(signal: np.ndarray, snr_db: float) -> np.ndarray:
+def awgn_channel(signal: np.ndarray, snr_db: float, num_rx: int = 1) -> np.ndarray:
     """AWGN信道
     
     Args:
@@ -34,12 +34,22 @@ def awgn_channel(signal: np.ndarray, snr_db: float) -> np.ndarray:
     noise_power = signal_power / (10 ** (snr_db / 10))
     
     # 生成复高斯噪声
-    noise = np.sqrt(noise_power/2) * (np.random.randn(*signal.shape) + 
-                                     1j * np.random.randn(*signal.shape))
-    
-    # 添加噪声
-    rx_signal = signal + noise
-    
+    if num_rx == 1:
+        noise_shape = signal.shape
+    else:
+        noise_shape = (num_rx, signal.shape[0]) if signal.ndim == 1 else (num_rx,) + signal.shape
+    noise = np.sqrt(noise_power / 2) * (
+        np.random.randn(*noise_shape) + 1j * np.random.randn(*noise_shape)
+    )
+
+    if num_rx == 1:
+        rx_signal = signal + noise
+    else:
+        if signal.ndim == 1:
+            rx_signal = signal[None, :] + noise
+        else:
+            rx_signal = signal + noise
+
     return rx_signal
 
 import numpy as np
@@ -53,6 +63,7 @@ def rayleigh_channel(
     *,
     block_fading: bool = True,
     rng: Optional[np.random.Generator] = None,
+    num_rx: int = 1,
 ) -> Tuple[NDArray[np.complex128], NDArray[np.complex128]]:
     """
     瑞利平坦衰落 (block 或 sample‑by‑sample) + AWGN
@@ -74,9 +85,16 @@ def rayleigh_channel(
 
     # 1) 生成瑞利系数：CN(0,1) / sqrt(2)，功率均值 = 1
     if block_fading:
-        h = (rng.standard_normal() + 1j * rng.standard_normal()) / np.sqrt(2)
+        h = (
+            rng.standard_normal(num_rx) + 1j * rng.standard_normal(num_rx)
+        ) / np.sqrt(2)
+        h_sig = h[:, None]
     else:  # independent fast fading
-        h = (rng.standard_normal(signal.shape) + 1j * rng.standard_normal(signal.shape)) / np.sqrt(2)
+        h = (
+            rng.standard_normal((num_rx, signal.shape[0]))
+            + 1j * rng.standard_normal((num_rx, signal.shape[0]))
+        ) / np.sqrt(2)
+        h_sig = h
 
     # 2) 计算噪声方差：Es/N0 (发射功率参考)
     sig_power = np.mean(np.abs(signal) ** 2)          # 发射端平均功率
@@ -84,15 +102,20 @@ def rayleigh_channel(
     noise_var = sig_power / snr_lin                   # 复噪声单样本功率
     noise_std = np.sqrt(noise_var / 2.0)              # (实/虚) 分量方差
 
-    noise = noise_std * (rng.standard_normal(signal.shape) +
-                         1j * rng.standard_normal(signal.shape))
+    noise_shape = (num_rx, signal.shape[0]) if num_rx > 1 else signal.shape
+    noise = noise_std * (
+        rng.standard_normal(noise_shape) + 1j * rng.standard_normal(noise_shape)
+    )
 
     # 3) 通过信道 + 加噪
-    rx_signal = h * signal + noise
+    if num_rx == 1:
+        rx_signal = h_sig * signal + noise
+    else:
+        rx_signal = h_sig * signal[None, :] + noise
 
     # reshape h 为 (N,) 方便后续逐样本处理；block_fading 时重复填充
     if block_fading:
-        h = np.full_like(signal, h, dtype=np.complex128)
+        h = np.repeat(h_sig, signal.shape[0], axis=1)
 
     return rx_signal.astype(np.complex128), h.astype(np.complex128)
 
@@ -103,6 +126,7 @@ def multipath_channel(
     num_paths: int = 4,
     max_delay: int = 16,
     rng: Optional[np.random.Generator] = None,
+    num_rx: int = 1,
 ) -> Tuple[NDArray[np.complex128], NDArray[np.complex128]]:
     r"""
     频率选择性瑞利多径信道 + AWGN
@@ -148,18 +172,24 @@ def multipath_channel(
     # -------------------------------------------------
     # 4) 通过信道 (线性卷积) —— 长信号用 FFT 卷积更快
     # -------------------------------------------------
-    rx_wo_noise = np.convolve(signal, h, mode="same")   # 保持与原长一致
+    rx_wo_noise_single = np.convolve(signal, h, mode="same")   # 保持与原长一致
+    if num_rx == 1:
+        rx_wo_noise = rx_wo_noise_single
+    else:
+        rx_wo_noise = np.tile(rx_wo_noise_single[None, :], (num_rx, 1))
 
     # -------------------------------------------------
     # 5) AWGN 噪声，参照接收端功率设 SNR
     # -------------------------------------------------
-    rx_power = np.mean(np.abs(rx_wo_noise) ** 2)        # ≈1 (因我们已归一化)
+    rx_power = np.mean(np.abs(rx_wo_noise_single) ** 2)        # ≈1 (因我们已归一化)
     snr_lin  = 10 ** (snr_db / 10)
     noise_var = rx_power / snr_lin
     noise_std = np.sqrt(noise_var / 2)                  # 单独对实/虚分量
 
-    noise = noise_std * (rng.standard_normal(signal.shape) +
-                         1j * rng.standard_normal(signal.shape))
+    noise_shape = (num_rx, signal.shape[0]) if num_rx > 1 else signal.shape
+    noise = noise_std * (
+        rng.standard_normal(noise_shape) + 1j * rng.standard_normal(noise_shape)
+    )
 
     rx_signal = rx_wo_noise + noise
     return rx_signal, h

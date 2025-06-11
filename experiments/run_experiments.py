@@ -45,12 +45,19 @@ def run_single_experiment(snr_db: float, cfg: OFDMConfig) -> float:
     
     # 信道传输
     if cfg.channel_type == "awgn":
-        rx_signal = awgn_channel(tx_signal, snr_db)
+        rx_signal = awgn_channel(tx_signal, snr_db, num_rx=cfg.num_rx_ant)
     else:
-        rx_signal, _ = multipath_channel(tx_signal, snr_db)
-    phase_rotation = 2 * np.pi * cfg.freq_offset * np.arange(len(rx_signal)) / cfg.n_fft
-    rx_signal = rx_signal * np.exp(1j * phase_rotation)
-    rx_signal = np.roll(rx_signal, cfg.timing_offset)
+        rx_signal, _ = multipath_channel(tx_signal, snr_db, num_rx=cfg.num_rx_ant)
+    time_len = rx_signal.shape[-1]
+    phase_rotation = (
+        2 * np.pi * cfg.freq_offset * np.arange(time_len) / cfg.n_fft
+    )
+    if rx_signal.ndim == 1:
+        rx_signal = rx_signal * np.exp(1j * phase_rotation)
+        rx_signal = np.roll(rx_signal, cfg.timing_offset)
+    else:
+        rx_signal = rx_signal * np.exp(1j * phase_rotation)[None, :]
+        rx_signal = np.roll(rx_signal, cfg.timing_offset, axis=-1)
     # 接收端处理
     _, bits_rx = ofdm_rx(rx_signal, cfg)
     

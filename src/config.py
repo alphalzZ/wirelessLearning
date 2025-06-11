@@ -22,6 +22,7 @@ class OFDMConfig:
     n_subcarrier: int = 3276           # 子载波数量
     mod_order: int = 4                 # 调制阶数（2:QPSK, 4:16QAM, 6:64QAM）
     num_symbols: int = 100             # OFDM符号数量
+    num_rx_ant: int = 1               # 接收天线数量
     
     # 导频配置
     pilot_pattern: str = 'comb'        # 导频图案类型：'comb'（梳状）或'block'（块状）
@@ -52,6 +53,8 @@ class OFDMConfig:
             raise ValueError("调制阶数必须是2、4或6")
         if self.num_symbols <= 0:
             raise ValueError("OFDM符号数量必须大于0")
+        if self.num_rx_ant <= 0:
+            raise ValueError("接收天线数量必须大于0")
             
         # 验证导频配置
         if self.pilot_pattern not in ['comb', 'block']:

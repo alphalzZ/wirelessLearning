@@ -68,16 +68,27 @@ class TestOFDMSystem(unittest.TestCase):
         
         # 添加噪声
         if self.cfg.channel_type == 'multipath':
-            rx_signal,h_channel = multipath_channel(tx_signal, self.cfg.snr_db)   
+            rx_signal, h_channel = multipath_channel(
+                tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant
+            )
         elif self.cfg.channel_type == 'awgn':
-            rx_signal = awgn_channel(tx_signal, self.cfg.snr_db)
+            rx_signal = awgn_channel(tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant)
         elif self.cfg.channel_type == 'rayleigh':
-            rx_signal,h_channel = rayleigh_channel(tx_signal, self.cfg.snr_db)
+            rx_signal, h_channel = rayleigh_channel(
+                tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant
+            )
         else:
             raise ValueError(f"不支持的信道类型: {self.cfg.channel_type}")
-        phase_rotation = 2 * np.pi * self.cfg.freq_offset * np.arange(len(rx_signal)) / self.cfg.n_fft
-        rx_signal = rx_signal * np.exp(1j * phase_rotation)
-        rx_signal = np.roll(rx_signal, self.cfg.timing_offset)
+        time_len = rx_signal.shape[-1]
+        phase_rotation = (
+            2 * np.pi * self.cfg.freq_offset * np.arange(time_len) / self.cfg.n_fft
+        )
+        if rx_signal.ndim == 1:
+            rx_signal = rx_signal * np.exp(1j * phase_rotation)
+            rx_signal = np.roll(rx_signal, self.cfg.timing_offset)
+        else:
+            rx_signal = rx_signal * np.exp(1j * phase_rotation)[None, :]
+            rx_signal = np.roll(rx_signal, self.cfg.timing_offset, axis=-1)
         # 接收端处理
         rx_syms, rx_bits = ofdm_rx(rx_signal, self.cfg)
         # 计算误码率
@@ -116,9 +127,19 @@ class TestOFDMSystem(unittest.TestCase):
         # 生成测试信号
         tx = np.random.randn(1000) + 1j * np.random.randn(1000)
         snr_db_target = 20
-        rx, h = multipath_channel(tx, snr_db_target)
+        rx, h = multipath_channel(tx, snr_db_target, num_rx=self.cfg.num_rx_ant)
         meas_snr = np.mean(np.abs(np.convolve(tx, h,'same'))**2) / np.mean(np.abs(rx - np.convolve(tx,h,'same'))**2)
         print(10*np.log10(meas_snr))   # 应接近 20 dB
+
+    def test_multi_antenna_reception(self):
+        """测试多天线接收流程"""
+        self.cfg.num_rx_ant = 4
+        total_bits = self.cfg.get_total_bits()
+        bits = np.random.randint(0, 2, total_bits)
+        tx_signal, _ = ofdm_tx(bits, self.cfg)
+        rx_signal = awgn_channel(tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant)
+        _, rx_bits = ofdm_rx(rx_signal, self.cfg)
+        self.assertEqual(len(rx_bits), len(bits))
 
 
     def test_ofdm_rx_with_channel_estimation(self):
@@ -135,7 +156,9 @@ class TestOFDMSystem(unittest.TestCase):
         snr_db = 0
         #计算噪声线性值
         noise_var = 10 ** (-snr_db / 10)
-        rx_signal,h_channel = multipath_channel(time_signal, snr_db)   
+        rx_signal, h_channel = multipath_channel(
+            time_signal, snr_db, num_rx=self.cfg.num_rx_ant
+        )
 
         # 移除CP并进行FFT
         rx_symbols_freq_offset = remove_cp_and_fft(rx_signal, self.cfg)
@@ -155,10 +178,4 @@ class TestOFDMSystem(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    # 创建测试套件
-    suite = unittest.TestSuite()
-    # 只添加信道估计测试
-    suite.addTest(TestOFDMSystem('test_ofdm_tx_rx'))
-    # 运行测试
-    runner = unittest.TextTestRunner()
-    runner.run(suite)
+    unittest.main()
