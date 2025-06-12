@@ -521,43 +521,56 @@ def remove_cp_and_fft(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     else:
         raise ValueError("signal维度必须为1或2")
 
-def qam_demodulation(symbols: np.ndarray, Qm: int) -> np.ndarray:
-    """
-    Gray‑coded QAM 硬判决解调（最小欧氏距离）
+def qam_demodulation(
+    symbols: np.ndarray,
+    Qm: int,
+    *,
+    return_llr: bool = False,
+    noise_var: float = 1.0,
+) -> np.ndarray:
+    """Gray coded QAM demodulation
 
     Parameters
     ----------
-    symbols : np.ndarray, complex
-        接收符号序列，需已做功率归一化 (E{|d|^2}=1)
+    symbols : np.ndarray of complex
+        接收的 QAM 符号 (功率需已归一化)
     Qm : int
-        每个符号承载的比特数：2 (QPSK) / 4 (16QAM) / 6 (64QAM)
-
-    Returns
-    -------
-    bits : np.ndarray, int8
-        解调得到的 0/1 比特流，一维展平
+        每个符号的比特数 2/4/6
+    return_llr : bool, optional
+        True 时返回按位 LLR, False 返回硬判决比特
+    noise_var : float, optional
+        噪声方差 (用于计算 LLR)
     """
     if Qm not in (2, 4, 6):
         raise ValueError("Qm 必须为 2, 4 或 6")
-    
+
     # --- 1) 生成 Gray 星座表 ---
-    M = 1 << Qm                              # 星座规模 2^Qm
-    # 列举所有比特组合：shape = (M, Qm)
-    bit_patterns = np.array(
-        list(itertools.product([0, 1], repeat=Qm)),
-        dtype=np.int8
-    )
-    # 使用已验证的调制函数得到星座点（保证映射一致）
+    M = 1 << Qm
+    bit_patterns = np.array(list(itertools.product([0, 1], repeat=Qm)), dtype=np.int8)
     ref_constellation = qam_modulation(bit_patterns.flatten(), Qm)
 
-    # --- 2) 最小欧氏距离决策 ---
-    # 距离矩阵 |r_k - s_m|^2 : shape = (N, M)
-    dist2 = np.abs(symbols.flatten()[:, None] - ref_constellation[None, :]) ** 2
-    nearest = dist2.argmin(axis=1)           # shape = (N,)
+    # --- 2) 计算距离矩阵 ---
+    rx = symbols.flatten()[:, None]
+    dist2 = np.abs(rx - ref_constellation[None, :]) ** 2
 
-    # --- 3) 查表还原比特 ---
+    if return_llr:
+        def logsumexp(a: np.ndarray, axis: int) -> np.ndarray:
+            a_max = np.max(a, axis=axis, keepdims=True)
+            return np.squeeze(a_max, axis=axis) + np.log(np.sum(np.exp(a - a_max), axis=axis))
+
+        llrs = np.zeros((rx.shape[0], Qm), dtype=np.float32)
+        metric = -dist2 / noise_var
+        for b in range(Qm):
+            mask0 = bit_patterns[:, b] == 0
+            mask1 = ~mask0
+            ll0 = logsumexp(metric[:, mask0], axis=1)
+            ll1 = logsumexp(metric[:, mask1], axis=1)
+            llrs[:, b] = ll0 - ll1
+        return llrs.reshape(-1)
+
+    # --- 3) 最小欧氏距离决策 ---
+    nearest = dist2.argmin(axis=1)
     demod_bits = bit_patterns[nearest].reshape(-1).astype(np.int8)
-
     return demod_bits
 
 def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:

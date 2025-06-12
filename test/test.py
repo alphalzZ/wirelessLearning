@@ -17,14 +17,24 @@ if project_root not in sys.path:
 
 from src.config import OFDMConfig,load_config
 from src.ofdm_tx import qam_modulation, insert_pilots, ofdm_tx
-from src.ofdm_rx import ofdm_rx, estimate_frequency_offset, compensate_frequency_offset, estimate_timing_offset, estimate_channel, channel_equalization, remove_cp_and_fft
+from src.ofdm_rx import (
+    ofdm_rx,
+    qam_demodulation,
+    estimate_frequency_offset,
+    compensate_frequency_offset,
+    estimate_timing_offset,
+    estimate_channel,
+    channel_equalization,
+    remove_cp_and_fft,
+)
 from src.channel import awgn_channel,rayleigh_channel, multipath_channel
+from src.fec import compute_k, ldpc_encode, ldpc_decode
 
 class TestOFDMSystem(unittest.TestCase):
     def setUp(self):
         """测试前的准备工作"""
         # 创建测试配置
-        self.cfg = load_config(r'.\config.yaml')
+        self.cfg = load_config('config.yaml')
         
     def test_qam_modulation(self):
         """测试QAM调制功能"""
@@ -140,6 +150,40 @@ class TestOFDMSystem(unittest.TestCase):
         rx_signal = awgn_channel(tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant)
         _, rx_bits = ofdm_rx(rx_signal, self.cfg)
         self.assertEqual(len(rx_bits), len(bits))
+
+    def test_ofdm_tx_rx_ldpc(self):
+        """结合LDPC编译码的完整OFDM流程"""
+        rate = self.cfg.code_rate
+        k = compute_k(self.cfg, rate)
+        info_bits = np.random.randint(0, 2, k)
+        code_blocks = ldpc_encode(info_bits, self.cfg, rate)
+        tx_bits = np.concatenate(code_blocks).astype(np.int8)
+
+        tx_signal, _ = ofdm_tx(tx_bits, self.cfg)
+        rx_signal = awgn_channel(tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant)
+        rx_syms, rx_bits = ofdm_rx(rx_signal, self.cfg)
+
+        signal_power = np.mean(np.abs(tx_signal) ** 2)
+        noise_var = signal_power / (10 ** (self.cfg.snr_db / 10))
+        data_idx = self.cfg.get_data_symbol_indices()
+        llr_all = qam_demodulation(
+            rx_syms[data_idx],
+            self.cfg.mod_order,
+            return_llr=True,
+            noise_var=noise_var,
+        )
+
+        seg_lengths = [len(cb) for cb in code_blocks]
+        start = 0
+        llrs = []
+        for n in seg_lengths:
+            llrs.append(llr_all[start:start+n])
+            start += n
+
+        dec_bits = ldpc_decode(llrs, self.cfg, rate)
+        ber = np.mean(dec_bits != info_bits)
+        print('LDPC BER:', ber)
+        self.assertEqual(len(dec_bits), len(info_bits))
 
 
     def test_ofdm_rx_with_channel_estimation(self):

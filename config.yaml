@@ -6,6 +6,7 @@ num_symbols: 14
 snr_db: 15
 n_subcarrier: 3276
 num_rx_ant: 1
+code_rate: 0.5
 pilot_pattern: comb
 pilot_spacing: 2
 pilot_symbols: [1,12]

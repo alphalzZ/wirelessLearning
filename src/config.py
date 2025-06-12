@@ -23,6 +23,7 @@ class OFDMConfig:
     mod_order: int = 4                 # 调制阶数（2:QPSK, 4:16QAM, 6:64QAM）
     num_symbols: int = 100             # OFDM符号数量
     num_rx_ant: int = 1               # 接收天线数量
+    code_rate: float = 1.0             # 信道编码码率 (0<rate<=1)
     
     # 导频配置
     pilot_pattern: str = 'comb'        # 导频图案类型：'comb'（梳状）或'block'（块状）
@@ -55,6 +56,8 @@ class OFDMConfig:
             raise ValueError("OFDM符号数量必须大于0")
         if self.num_rx_ant <= 0:
             raise ValueError("接收天线数量必须大于0")
+        if not (0 < self.code_rate <= 1):
+            raise ValueError("code_rate 必须在0到1之间")
             
         # 验证导频配置
         if self.pilot_pattern not in ['comb', 'block']:
