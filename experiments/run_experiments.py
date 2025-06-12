@@ -15,10 +15,11 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.config import OFDMConfig, load_config
-from src.ofdm_tx import ofdm_tx
-from src.channel import awgn_channel, rayleigh_channel,multipath_channel
+from src.ofdm_tx import ofdm_tx, add_timing_offset_and_freq_offset
+from src.channel import awgn_channel, rayleigh_channel,multipath_channel, sionna_fading_channel, sionna_tdl_channel
 from src.ofdm_rx import ofdm_rx
 from src.metrics import calculate_ber, calculate_ser
+from src.fec import compute_k
 import matplotlib.pyplot as plt
 
 # 配置日志
@@ -36,9 +37,9 @@ def run_single_experiment(snr_db: float, cfg: OFDMConfig) -> float:
         误比特率
     """
     # 总bit
-    total_bits = cfg.get_total_bits()
+    k = compute_k(cfg, cfg.code_rate)
     # 生成随机比特流
-    bits_tx = np.random.randint(0, 2, total_bits)
+    bits_tx = np.random.randint(0, 2, k)
     
     # 发送端处理
     tx_signal, _ = ofdm_tx(bits_tx, cfg)
@@ -46,18 +47,15 @@ def run_single_experiment(snr_db: float, cfg: OFDMConfig) -> float:
     # 信道传输
     if cfg.channel_type == "awgn":
         rx_signal = awgn_channel(tx_signal, snr_db, num_rx=cfg.num_rx_ant)
-    else:
+    elif cfg.channel_type == "multipath":
         rx_signal, _ = multipath_channel(tx_signal, snr_db, num_rx=cfg.num_rx_ant)
-    time_len = rx_signal.shape[-1]
-    phase_rotation = (
-        2 * np.pi * cfg.freq_offset * np.arange(time_len) / cfg.n_fft
-    )
-    if rx_signal.ndim == 1:
-        rx_signal = rx_signal * np.exp(1j * phase_rotation)
-        rx_signal = np.roll(rx_signal, cfg.timing_offset)
-    else:
-        rx_signal = rx_signal * np.exp(1j * phase_rotation)[None, :]
-        rx_signal = np.roll(rx_signal, cfg.timing_offset, axis=-1)
+    elif cfg.channel_type == "rayleigh":
+        rx_signal, _ = rayleigh_channel(tx_signal, snr_db, num_rx=cfg.num_rx_ant)
+    elif cfg.channel_type == "sionna_fading":
+        rx_signal = sionna_fading_channel(tx_signal, snr_db, num_rx=cfg.num_rx_ant)
+    elif cfg.channel_type == "sionna_tdl":
+        rx_signal = sionna_tdl_channel(tx_signal, snr_db, num_rx=cfg.num_rx_ant)
+    rx_signal = add_timing_offset_and_freq_offset(rx_signal, cfg)
     # 接收端处理
     _, bits_rx = ofdm_rx(rx_signal, cfg)
     
@@ -70,9 +68,9 @@ def main():
     # 加载配置
     config_path = Path(__file__).parent.parent / "config.yaml"
     cfg = load_config(config_path)
-    snr_db_list = np.arange(0, 31, 2)
-    num_trials = 200  # 每个SNR点的仿真次数
-    to_methods = ['fft_ml', 'diff_phase', 'ml_then_phase']
+    snr_db_list = np.arange(0, 31, 3)
+    num_trials = 100  # 每个SNR点的仿真次数
+    num_carriers = [1536, 3276]
     
     # 创建结果目录
     results_dir = Path(__file__).parent.parent / "results"
@@ -82,8 +80,8 @@ def main():
     all_results = {}
     
     # 为每种方法运行仿真
-    for to_method in to_methods:
-        cfg.est_time = to_method
+    for num_carrier in num_carriers:
+        cfg.set_n_subcarrier(num_carrier)
         # 运行不同SNR下的实验
         results = []
         for snr_db in snr_db_list:
@@ -94,34 +92,34 @@ def main():
             for trial in range(num_trials):
                 ber = run_single_experiment(snr_db, cfg)
                 current_ber.append(ber)
-            
             # 计算平均误码率
             avg_ber = np.mean(current_ber)
             results.append((snr_db, avg_ber))
-            logger.info(f"channel_type: {cfg.channel_type}, To set method: {to_method},"
+            logger.info(f"channel_type: {cfg.channel_type}, num_carrier: {num_carrier},"
                         f" SNR = {snr_db:2d} dB, BER = {avg_ber:.3e}")
-        
+            if avg_ber == 0:
+                break
         # 存储结果
-        all_results[to_method] = results
+        all_results[num_carrier] = results
         
         # 保存结果到文件
-        results_file = results_dir / f"results_{cfg.channel_type}_{to_method}.pkl"
+        results_file = results_dir / f"results_{cfg.channel_type}_{num_carrier}.pkl"
         with open(results_file, 'wb') as f:
             pickle.dump(results, f)
     
     # 绘制所有方法的BER vs SNR曲线
     plt.figure(figsize=(10, 5))
-    for method, results in all_results.items():
-        plt.semilogy(snr_db_list, [result[1] for result in results], 'o-', label=f'{method}')
+    for num_carrier, results in all_results.items():
+        plt.semilogy(snr_db_list, [result[1] for result in results], 'o-', label=f'子载波{num_carrier}')
     
     plt.grid(True)
     plt.xlabel('SNR (dB)')
     plt.ylabel('BER')
-    plt.title('不同定时估计方法的BER性能对比')
+    plt.title('不同子载波数的BER性能对比')
     plt.legend()
     
     # 保存图片
-    plt.savefig(results_dir / f"ber_vs_snr_comparison_{cfg.channel_type}.png")
+    plt.savefig(results_dir / f"ber_vs_snr_comparison_{cfg.channel_type}_{num_carrier}.png")
     plt.show()
     plt.close()
 

@@ -79,6 +79,24 @@ def insert_pilots(cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     ofdm_symbol[pilot_indices] = pilot_symbols
     
     return ofdm_symbol
+def add_timing_offset_and_freq_offset(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
+    """添加定时偏移和频偏
+    
+    Args:
+        signal: 输入信号
+        cfg: 系统配置参数
+    """
+    time_len = signal.shape[-1]
+    phase_rotation = (
+        2 * np.pi * cfg.freq_offset * np.arange(time_len) / cfg.n_fft
+    )
+    if signal.ndim == 1:
+        signal = signal * np.exp(1j * phase_rotation)
+        signal = np.roll(signal, cfg.timing_offset)
+    else:
+        signal = signal * np.exp(1j * phase_rotation)[None, :]
+        signal = np.roll(signal, cfg.timing_offset, axis=-1)
+    return signal
 
 def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
     """OFDM发送端处理

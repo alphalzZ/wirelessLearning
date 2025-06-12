@@ -16,7 +16,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.config import OFDMConfig,load_config
-from src.ofdm_tx import qam_modulation, insert_pilots, ofdm_tx
+from src.ofdm_tx import qam_modulation, insert_pilots, ofdm_tx, add_timing_offset_and_freq_offset
 from src.ofdm_rx import (
     ofdm_rx,
     qam_demodulation,
@@ -27,7 +27,7 @@ from src.ofdm_rx import (
     channel_equalization,
     remove_cp_and_fft,
 )
-from src.channel import awgn_channel,rayleigh_channel, multipath_channel
+from src.channel import awgn_channel,rayleigh_channel, multipath_channel, sionna_fading_channel, sionna_tdl_channel
 from src.fec import compute_k, ldpc_encode, ldpc_decode
 
 class TestOFDMSystem(unittest.TestCase):
@@ -85,23 +85,22 @@ class TestOFDMSystem(unittest.TestCase):
             rx_signal, h_channel = rayleigh_channel(
                 tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant
             )
+        elif self.cfg.channel_type == 'sionna_fading':
+            rx_signal = sionna_fading_channel(
+                tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant
+            )
+        elif self.cfg.channel_type == 'sionna_tdl':
+            rx_signal = sionna_tdl_channel(
+                tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant
+            )
         else:
             raise ValueError(f"不支持的信道类型: {self.cfg.channel_type}")
-        time_len = rx_signal.shape[-1]
-        phase_rotation = (
-            2 * np.pi * self.cfg.freq_offset * np.arange(time_len) / self.cfg.n_fft
-        )
-        if rx_signal.ndim == 1:
-            rx_signal = rx_signal * np.exp(1j * phase_rotation)
-            rx_signal = np.roll(rx_signal, self.cfg.timing_offset)
-        else:
-            rx_signal = rx_signal * np.exp(1j * phase_rotation)[None, :]
-            rx_signal = np.roll(rx_signal, self.cfg.timing_offset, axis=-1)
+        rx_signal = add_timing_offset_and_freq_offset(rx_signal, self.cfg)
         # 接收端处理
         rx_syms, rx_bits = ofdm_rx(rx_signal, self.cfg)
         # 计算误码率
         bits_error = np.mean(rx_bits != bits)
-        print(f'硬判决bit error:{bits_error}')
+        print(f'ldpc bit error:{bits_error}')
         # 绘制星座图
         plt.figure(figsize=(10, 5))
         data_indices = self.cfg.get_data_symbol_indices()

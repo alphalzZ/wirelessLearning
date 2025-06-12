@@ -37,7 +37,7 @@ def awgn_channel(signal: np.ndarray, snr_db: float, num_rx: int = 1) -> np.ndarr
     if num_rx == 1:
         noise_shape = signal.shape
     else:
-        noise_shape = (num_rx, signal.shape[0]) if signal.ndim == 1 else (num_rx,) + signal.shape
+        noise_shape = (num_rx, signal.shape[0]) if signal.ndim == 1 else signal.shape
     noise = np.sqrt(noise_power / 2) * (
         np.random.randn(*noise_shape) + 1j * np.random.randn(*noise_shape)
     )
@@ -205,7 +205,7 @@ def sionna_fading_channel(
     """Rayleigh衰落信道封装，优先使用Sionna实现"""
     try:
         import tensorflow as tf
-        from sionna.channel import FlatFadingChannel
+        from sionna.phy.channel import FlatFadingChannel
     except Exception as exc:  # pragma: no cover - optional dependency
         # 回退到本地实现
         return rayleigh_channel(signal, snr_db, block_fading=block_fading, num_rx=num_rx)
@@ -217,7 +217,7 @@ def sionna_fading_channel(
         add_awgn=False
     )
     rx_tf = ch(signal_tf)
-    rx_np = tf.squeeze(rx_tf).numpy()
+    rx_np = tf.squeeze(rx_tf).numpy().transpose()
     rx_np = awgn_channel(rx_np, snr_db, num_rx=num_rx)
     return rx_np
 
@@ -233,7 +233,7 @@ def sionna_tdl_channel(
 ) -> NDArray[np.complex128]:
     """3GPP TDL信道封装，优先使用Sionna实现"""
     try:
-        from sionna.channel.tr38901 import TDL
+        from sionna.phy.channel.tr38901 import TDL
     except Exception as exc:  # pragma: no cover - optional dependency
         return multipath_channel(signal, snr_db, num_rx=num_rx)[0]
 

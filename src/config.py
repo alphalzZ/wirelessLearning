@@ -4,7 +4,7 @@ OFDM系统配置模块
 日期：2024-05-31
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
 import numpy as np
 import yaml
@@ -18,19 +18,19 @@ class OFDMConfig:
     display_est_result: bool = False    # 是否显示信道估计结果
     # 基本参数
     n_fft: int = 4096                    # FFT大小
-    cp_len: int = 16                   # 循环前缀长度
+    cp_len: int = 320                   # 循环前缀长度
     n_subcarrier: int = 3276           # 子载波数量
     mod_order: int = 4                 # 调制阶数（2:QPSK, 4:16QAM, 6:64QAM）
-    num_symbols: int = 100             # OFDM符号数量
+    num_symbols: int = 14             # OFDM符号数量
     num_rx_ant: int = 1               # 接收天线数量
-    code_rate: float = 1.0             # 信道编码码率 (0<rate<=1)
+    code_rate: float = 0.5             # 信道编码码率 (0<rate<=1)
     
     # 导频配置
     pilot_pattern: str = 'comb'        # 导频图案类型：'comb'（梳状）或'block'（块状）
-    pilot_spacing: int = 8             # 导频间隔（梳状导频）
+    pilot_spacing: int = 2             # 导频间隔（梳状导频）
     pilot_blocks: int = 4              # 导频块数量（块状导频）
     pilot_power: float = 1.0           # 导频功率（相对于数据符号）
-    pilot_symbols: List[int] = None    # 包含导频的OFDM符号索引列表，None表示所有符号都包含导频
+    pilot_symbols: Optional[List[int]] = field(default_factory=lambda: [2,11])    # 包含导频的OFDM符号索引列表，None表示所有符号都包含导频
     pilot_period: int = 1              # 导频周期（每隔多少个OFDM符号插入一次导频）
     
     # 信道估计配置
@@ -91,7 +91,10 @@ class OFDMConfig:
     def _is_power_of_2(self, n: int) -> bool:
         """检查一个数是否是2的幂"""
         return n > 0 and (n & (n - 1)) == 0
-    
+    def set_n_subcarrier(self, n_subcarrier: int):
+        self.n_subcarrier = n_subcarrier
+        self._pilot_symbols_cache = None # 修改子载波数后，导频符号缓存失效
+        self.get_pilot_symbols() # 重新生成导频符号
     def get_subcarrier_offset(self)->int:
         """获取子载波偏移"""
         return (self.n_fft-self.n_subcarrier)//2

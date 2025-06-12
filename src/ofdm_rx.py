@@ -632,6 +632,7 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
         _, n_segments = get_segment_lengths(cfg, cfg.code_rate)
         start = 0
         llr_list = []
+        llr = -1*llr
         for n in n_segments:
             llr_list.append(llr[start:start + n])
             start += n

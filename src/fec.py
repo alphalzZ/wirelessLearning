@@ -13,14 +13,20 @@ from typing import List
 import numpy as np
 
 try:
-    from sionna.fec.ldpc.encoding import LDPC5GEncoder
-    from sionna.fec.ldpc.decoding import LDPC5GDecoder
+    from sionna.phy.fec.ldpc.encoding import LDPC5GEncoder
+    from sionna.phy.fec.ldpc.decoding import LDPC5GDecoder
 except ImportError as exc:  # pragma: no cover - library may be missing
     raise ImportError(
         "Sionna 0.19.2 is required for LDPC operations"
     ) from exc
+import sys
+from pathlib import Path
 
-from .config import OFDMConfig
+# 添加项目根目录到Python路径
+project_root = str(Path(__file__).parent.parent)
+if project_root not in sys.path:
+    sys.path.append(project_root)
+from src.config import OFDMConfig
 
 # 3GPP NR LDPC 最大信息比特数
 MAX_LDPC_K = 8448
@@ -131,6 +137,6 @@ if __name__ == "__main__":  # 简单测试
     k = compute_k(cfg, r)
     test_bits = np.random.randint(0, 2, k)
     cbs = ldpc_encode(test_bits, cfg, r)
-    noisy_llrs = [1 - 2 * cb for cb in cbs]
+    noisy_llrs = [-1*(1 - 2 * cb) for cb in cbs]
     dec = ldpc_decode(noisy_llrs, cfg, r)
     print(f"比特是否一致: {np.all(dec == test_bits)}")
