@@ -210,18 +210,54 @@ def sionna_fading_channel(
         # 回退到本地实现
         return rayleigh_channel(signal, snr_db, block_fading=block_fading, num_rx=num_rx)
 
-    signal_tf = tf.constant(signal[None, :], dtype=tf.complex64)
+    signal_tf = tf.constant(signal[None, :, None], dtype=tf.complex64)
     ch = FlatFadingChannel(
-        num_tx=1,
-        num_rx=num_rx,
-        add_awgn=False,
-        block_fading=block_fading,
+        num_tx_ant=1,
+        num_rx_ant=num_rx,
+        add_awgn=False
     )
-    rx_tf, h_tf = ch(signal_tf)
+    rx_tf = ch(signal_tf)
     rx_np = tf.squeeze(rx_tf).numpy()
-    h_np = tf.squeeze(h_tf).numpy()
     rx_np = awgn_channel(rx_np, snr_db, num_rx=num_rx)
-    return rx_np, h_np
+    return rx_np
+
+
+def sionna_tdl_channel(
+    signal: NDArray[np.complex128],
+    snr_db: float,
+    *,
+    model: str = "C",
+    delay_spread: float = 300e-9,
+    carrier_freq: float = 3.5e9,
+    num_rx: int = 1,
+) -> NDArray[np.complex128]:
+    """3GPP TDL信道封装，优先使用Sionna实现"""
+    try:
+        from sionna.channel.tr38901 import TDL
+    except Exception as exc:  # pragma: no cover - optional dependency
+        return multipath_channel(signal, snr_db, num_rx=num_rx)[0]
+
+    tdl = TDL(model, delay_spread, carrier_freq, num_rx_ant=num_rx, num_tx_ant=1)
+    delays = tdl.delays.numpy()
+    powers = tdl.mean_powers.numpy()
+
+    # 简易基于平均功率的瑞利多径模型实现
+    max_delay = int(np.ceil(len(delays)))
+    delay_samples = np.round(delays / delays.max() * max_delay).astype(int)
+
+    rng = np.random.default_rng()
+    h = np.zeros((num_rx, delay_samples.max() + 1), dtype=np.complex128)
+    for d, p in zip(delay_samples, powers):
+        gain = (rng.standard_normal(num_rx) + 1j * rng.standard_normal(num_rx)) / np.sqrt(2)
+        h[:, d] += gain * np.sqrt(p)
+
+    if num_rx == 1:
+        rx = np.convolve(signal, h[0], mode="same")
+    else:
+        rx = np.stack([np.convolve(signal, h[i], mode="same") for i in range(num_rx)], axis=0)
+
+    rx = awgn_channel(rx, snr_db, num_rx=num_rx)
+    return rx
 
 if __name__ == "__main__":
     # 创建测试配置
