@@ -23,6 +23,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.config import OFDMConfig
+from src.fec import ldpc_encode, compute_k
 
 import numpy as np
 
@@ -89,10 +90,20 @@ def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
     Returns:
         Tuple[np.ndarray, np.ndarray]: (时域信号, 频域符号)
     """
-    # 验证输入
+    # FEC 编码
+    if cfg.code_rate < 1.0:
+        k = compute_k(cfg, cfg.code_rate)
+        if len(bits) != k:
+            raise ValueError(f"信息比特长度应为{k}")
+        code_blocks = ldpc_encode(bits.astype(np.int8), cfg, cfg.code_rate)
+        tx_bits = np.concatenate(code_blocks)
+    else:
+        total_bits = cfg.get_total_bits()
+        if len(bits) != total_bits:
+            raise ValueError(f"输入比特流长度必须是{total_bits}")
+        tx_bits = bits.astype(np.int8)
+
     total_bits = cfg.get_total_bits()
-    if len(bits) != total_bits:
-        raise ValueError(f"输入比特流长度必须是{total_bits}")
     
     # 计算每个OFDM符号的比特数
     bits_per_symbol = cfg.get_total_bits_per_symbol()
@@ -114,7 +125,7 @@ def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
             # 提取当前符号的比特
             start_idx = k * bits_per_symbol
             end_idx = start_idx + bits_per_symbol
-            symbol_bits = bits[start_idx:end_idx]
+            symbol_bits = tx_bits[start_idx:end_idx]
             
             # QAM调制
             data_symbols = qam_modulation(symbol_bits, cfg.mod_order)

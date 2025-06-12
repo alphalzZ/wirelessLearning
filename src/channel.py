@@ -194,6 +194,35 @@ def multipath_channel(
     rx_signal = rx_wo_noise + noise
     return rx_signal, h
 
+
+def sionna_fading_channel(
+    signal: NDArray[np.complex128],
+    snr_db: float,
+    *,
+    block_fading: bool = True,
+    num_rx: int = 1,
+):
+    """Rayleigh衰落信道封装，优先使用Sionna实现"""
+    try:
+        import tensorflow as tf
+        from sionna.channel import FlatFadingChannel
+    except Exception as exc:  # pragma: no cover - optional dependency
+        # 回退到本地实现
+        return rayleigh_channel(signal, snr_db, block_fading=block_fading, num_rx=num_rx)
+
+    signal_tf = tf.constant(signal[None, :], dtype=tf.complex64)
+    ch = FlatFadingChannel(
+        num_tx=1,
+        num_rx=num_rx,
+        add_awgn=False,
+        block_fading=block_fading,
+    )
+    rx_tf, h_tf = ch(signal_tf)
+    rx_np = tf.squeeze(rx_tf).numpy()
+    h_np = tf.squeeze(h_tf).numpy()
+    rx_np = awgn_channel(rx_np, snr_db, num_rx=num_rx)
+    return rx_np, h_np
+
 if __name__ == "__main__":
     # 创建测试配置
     cfg = OFDMConfig(

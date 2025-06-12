@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from numpy.typing import NDArray
 import itertools
 from src.ofdm_tx import qam_modulation
+from src.fec import ldpc_decode, get_segment_lengths
 
 # plt.rcParams['font.sans-serif'] = ['SimHei']  # Windows 黑体
 plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']  # Windows 微软雅黑
@@ -622,10 +623,26 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     rx_symbols_equalized = channel_equalization(signal_timing, h_est, noise_var)
     rx_combined = np.mean(rx_symbols_equalized, axis=0)
     
-    # 4. 解调（这里需要实现QAM解调）
-    # TODO: 实现QAM解调
+    # 4. QAM 解调
     data_symbol_indices = cfg.get_data_symbol_indices()
-    bits_rx = qam_demodulation(rx_combined[data_symbol_indices], cfg.mod_order)
+
+    llr = qam_demodulation(
+        rx_combined[data_symbol_indices],
+        cfg.mod_order,
+        return_llr=True,
+        noise_var=noise_var,
+    )
+
+    if cfg.code_rate < 1.0:
+        _, n_segments = get_segment_lengths(cfg, cfg.code_rate)
+        start = 0
+        llr_list = []
+        for n in n_segments:
+            llr_list.append(llr[start:start + n])
+            start += n
+        bits_rx = ldpc_decode(llr_list, cfg, cfg.code_rate)
+    else:
+        bits_rx = (llr < 0).astype(np.int8)
 
     return rx_combined, bits_rx
 

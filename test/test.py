@@ -57,10 +57,8 @@ class TestOFDMSystem(unittest.TestCase):
     def test_insert_pilots(self):
         """测试导频插入功能"""
         # 生成测试数据
-        data_symbols = np.ones(self.cfg.get_data_indices().shape[0], dtype=np.complex64)
-        
         # 测试导频插入
-        ofdm_symbol, pilot_indices, data_indices = insert_pilots(data_symbols, self.cfg)
+        ofdm_symbol, pilot_indices, data_indices = insert_pilots(self.cfg)
         
         # 验证输出
         self.assertEqual(len(ofdm_symbol), self.cfg.n_fft)
@@ -70,8 +68,8 @@ class TestOFDMSystem(unittest.TestCase):
     def test_ofdm_tx_rx(self):
         """测试OFDM收发端功能"""
         # 生成随机比特流
-        total_bits = self.cfg.get_total_bits()
-        bits = np.random.randint(0, 2, total_bits)
+        k = compute_k(self.cfg, self.cfg.code_rate)
+        bits = np.random.randint(0, 2, k)
         
         # 发送端处理
         tx_signal, freq_symbols = ofdm_tx(bits, self.cfg)
@@ -144,8 +142,8 @@ class TestOFDMSystem(unittest.TestCase):
     def test_multi_antenna_reception(self):
         """测试多天线接收流程"""
         self.cfg.num_rx_ant = 4
-        total_bits = self.cfg.get_total_bits()
-        bits = np.random.randint(0, 2, total_bits)
+        k = compute_k(self.cfg, self.cfg.code_rate)
+        bits = np.random.randint(0, 2, k)
         tx_signal, _ = ofdm_tx(bits, self.cfg)
         rx_signal = awgn_channel(tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant)
         _, rx_bits = ofdm_rx(rx_signal, self.cfg)
@@ -156,31 +154,11 @@ class TestOFDMSystem(unittest.TestCase):
         rate = self.cfg.code_rate
         k = compute_k(self.cfg, rate)
         info_bits = np.random.randint(0, 2, k)
-        code_blocks = ldpc_encode(info_bits, self.cfg, rate)
-        tx_bits = np.concatenate(code_blocks).astype(np.int8)
 
-        tx_signal, _ = ofdm_tx(tx_bits, self.cfg)
+        tx_signal, _ = ofdm_tx(info_bits, self.cfg)
         rx_signal = awgn_channel(tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant)
-        rx_syms, rx_bits = ofdm_rx(rx_signal, self.cfg)
+        _, dec_bits = ofdm_rx(rx_signal, self.cfg)
 
-        signal_power = np.mean(np.abs(tx_signal) ** 2)
-        noise_var = signal_power / (10 ** (self.cfg.snr_db / 10))
-        data_idx = self.cfg.get_data_symbol_indices()
-        llr_all = qam_demodulation(
-            rx_syms[data_idx],
-            self.cfg.mod_order,
-            return_llr=True,
-            noise_var=noise_var,
-        )
-
-        seg_lengths = [len(cb) for cb in code_blocks]
-        start = 0
-        llrs = []
-        for n in seg_lengths:
-            llrs.append(llr_all[start:start+n])
-            start += n
-
-        dec_bits = ldpc_decode(llrs, self.cfg, rate)
         ber = np.mean(dec_bits != info_bits)
         print('LDPC BER:', ber)
         self.assertEqual(len(dec_bits), len(info_bits))
@@ -190,8 +168,8 @@ class TestOFDMSystem(unittest.TestCase):
         """测试OFDM接收端信道估计功能"""
         # 生成随机比特流
         np.random.seed(42)
-        total_bits = self.cfg.get_total_bits()
-        bits = np.random.randint(0, 2, total_bits)
+        k = compute_k(self.cfg, self.cfg.code_rate)
+        bits = np.random.randint(0, 2, k)
         
         # 生成OFDM符号
         time_signal, pilot_indices, data_indices, freq_symbols = ofdm_tx(bits, self.cfg)

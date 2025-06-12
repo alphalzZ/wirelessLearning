@@ -34,6 +34,26 @@ def compute_k(cfg: OFDMConfig, rate: float) -> int:
     return int(total_bits * rate)
 
 
+def get_segment_lengths(cfg: OFDMConfig, rate: float) -> tuple[list[int], list[int]]:
+    """Return per-segment (k, n) lengths for a given configuration."""
+    k_total = compute_k(cfg, rate)
+    n_total = cfg.get_total_bits()
+
+    if k_total <= MAX_LDPC_K and n_total <= MAX_LDPC_N:
+        return [k_total], [n_total]
+
+    num_segments = math.ceil(k_total / MAX_LDPC_K)
+    base_k = k_total // num_segments
+    k_segments = [base_k + (1 if i < k_total % num_segments else 0)
+                  for i in range(num_segments)]
+
+    base_n = n_total // num_segments
+    n_segments = [base_n + (1 if i < n_total % num_segments else 0)
+                  for i in range(num_segments)]
+
+    return k_segments, n_segments
+
+
 def _segment_information(bits: np.ndarray, segment_length: int) -> List[np.ndarray]:
     """将信息比特按照给定长度分段"""
     segments = []
@@ -58,20 +78,7 @@ def ldpc_encode(bits: np.ndarray, cfg: OFDMConfig, rate: float) -> List[np.ndarr
     if bits.size != k_total:
         raise ValueError(f"输入比特数应为{k_total}, 实际为{bits.size}")
 
-    if k_total <= MAX_LDPC_K and n_total <= MAX_LDPC_N:
-        encoder = LDPC5GEncoder(k_total, n_total)
-        coded = encoder(bits[None, :].astype("float32")).numpy().squeeze()
-        return [coded]
-
-    num_segments = math.ceil(k_total / MAX_LDPC_K)
-
-    base_k = k_total // num_segments
-    k_segments = [base_k + (1 if i < k_total % num_segments else 0)
-                  for i in range(num_segments)]
-
-    base_n = n_total // num_segments
-    n_segments = [base_n + (1 if i < n_total % num_segments else 0)
-                  for i in range(num_segments)]
+    k_segments, n_segments = get_segment_lengths(cfg, rate)
 
     encoded_segments = []
     start = 0
@@ -95,11 +102,15 @@ def ldpc_decode(
     """对应 :func:`ldpc_encode` 的分段译码"""
 
     k_total = compute_k(cfg, rate)
+    k_segments, n_segments = get_segment_lengths(cfg, rate)
+
+    if len(llrs) != len(n_segments):
+        raise ValueError("LLR 段数与编码段数不匹配")
 
     decoded_list = []
-    for llr in llrs:
-        n_seg = llr.size
-        k_seg = int(round(n_seg * rate))
+    for llr, k_seg, n_seg in zip(llrs, k_segments, n_segments):
+        if llr.size != n_seg:
+            raise ValueError("LLR 长度与码字长度不符")
         encoder = LDPC5GEncoder(k_seg, n_seg)
         decoder = LDPC5GDecoder(encoder, hard_out=True, num_iter=num_iter)
         decoded = decoder(llr[None, :].astype("float32")).numpy().squeeze()
