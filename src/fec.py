@@ -99,9 +99,14 @@ def ldpc_decode(
     *,
     num_iter: int = 6,
 ) -> np.ndarray:
-    """对应 :func:`ldpc_encode` 的分段译码"""
+    """对应 :func:`ldpc_encode` 的分段译码
+
+    ``k_segments`` 与 ``ldpc_encode`` 中计算保持一致，避免由 ``n_seg * rate``
+    产生的舍入误差导致比特长度不匹配。
+    """
 
     k_total = compute_k(cfg, rate)
+    # 重新计算每段 (k,n) 长度，确保与编码端一致
     k_segments, n_segments = get_segment_lengths(cfg, rate)
 
     if len(llrs) != len(n_segments):
