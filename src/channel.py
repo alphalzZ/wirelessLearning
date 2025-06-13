@@ -27,11 +27,9 @@ def awgn_channel(signal: np.ndarray, snr_db: float, num_rx: int = 1) -> np.ndarr
     Returns:
         经过AWGN信道的信号
     """
-    # 计算信号功率
-    signal_power = np.mean(np.abs(signal) ** 2)
-    
-    # 计算噪声功率
-    noise_power = signal_power / (10 ** (snr_db / 10))
+    # 噪声功率按单位平均功率信号定义，避免随输入幅度变化
+    snr_lin = 10 ** (snr_db / 10)
+    noise_power = 1 / snr_lin
     
     # 生成复高斯噪声
     if num_rx == 1:

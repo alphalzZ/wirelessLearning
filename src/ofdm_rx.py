@@ -501,7 +501,7 @@ def remove_cp_and_fft(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
             start_idx = i * symbol_len + cfg.cp_len
             end_idx = start_idx + cfg.n_fft
             time_symbol = signal[start_idx:end_idx]
-            rx_symbols[i] = np.fft.fft(time_symbol, cfg.n_fft)
+            rx_symbols[i] = np.fft.fft(time_symbol, cfg.n_fft) / np.sqrt(cfg.n_fft)
         return rx_symbols[:, subcarrier_indices]
     elif signal.ndim == 2:
         num_ant, total_len = signal.shape
@@ -512,7 +512,7 @@ def remove_cp_and_fft(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
                 start_idx = i * symbol_len + cfg.cp_len
                 end_idx = start_idx + cfg.n_fft
                 time_symbol = signal[ant, start_idx:end_idx]
-                rx_symbols[ant, i] = np.fft.fft(time_symbol, cfg.n_fft)
+                rx_symbols[ant, i] = np.fft.fft(time_symbol, cfg.n_fft) / np.sqrt(cfg.n_fft)
         return rx_symbols[..., subcarrier_indices]
     else:
         raise ValueError("signal维度必须为1或2")
