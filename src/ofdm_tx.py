@@ -165,10 +165,6 @@ def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
         # 添加到总信号
         time_signal = np.concatenate([time_signal, time_symbol])
 
-    # 时域信号功率归一化
-    power = np.mean(np.abs(time_signal) ** 2)
-    if power > 0:
-        time_signal = time_signal / np.sqrt(power)
 
     return time_signal, freq_symbols
 
