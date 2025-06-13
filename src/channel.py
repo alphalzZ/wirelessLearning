@@ -19,26 +19,25 @@ from src.config import OFDMConfig
 
 def awgn_channel(signal: np.ndarray, snr_db: float, num_rx: int = 1) -> np.ndarray:
     """AWGN信道
-    
+
     Args:
         signal: 输入信号
         snr_db: 信噪比(dB)
-    
+
     Returns:
         经过AWGN信道的信号
     """
-    # 噪声功率按单位平均功率信号定义，避免随输入幅度变化
-    snr_lin = 10 ** (snr_db / 10)
-    noise_power = 1 / snr_lin
-    
-    # 生成复高斯噪声
+
+    # 噪声功率固定为 1，发送端会根据 ``snr_db`` 缩放信号
+
+    # 生成复高斯噪声 (E{|n|^2}=1)
     if num_rx == 1:
         noise_shape = signal.shape
     else:
         noise_shape = (num_rx, signal.shape[0]) if signal.ndim == 1 else signal.shape
-    noise = np.sqrt(noise_power / 2) * (
+    noise = (
         np.random.randn(*noise_shape) + 1j * np.random.randn(*noise_shape)
-    )
+    ) / np.sqrt(2)
 
     if num_rx == 1:
         rx_signal = signal + noise

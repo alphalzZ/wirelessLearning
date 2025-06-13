@@ -165,6 +165,9 @@ def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
         # 添加到总信号
         time_signal = np.concatenate([time_signal, time_symbol])
 
+    # 根据目标 SNR 缩放信号幅度，噪声功率在信道中固定为 1
+    sigScal = 10 ** (cfg.snr_db / 20)
+    time_signal = time_signal * sigScal
 
     return time_signal, freq_symbols
 
