@@ -16,7 +16,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.config import OFDMConfig,load_config
-from src.ofdm_tx import qam_modulation, insert_pilots, ofdm_tx, add_timing_offset_and_freq_offset
+from src.ofdm_tx import qam_modulation, insert_pilots, ofdm_tx, add_timing_offset_and_freq_offset, compute_k
 from src.ofdm_rx import (
     ofdm_rx,
     qam_demodulation,
@@ -28,7 +28,6 @@ from src.ofdm_rx import (
     remove_cp_and_fft,
 )
 from src.channel import awgn_channel,rayleigh_channel, multipath_channel, sionna_fading_channel, sionna_tdl_channel
-from src.fec import compute_k, ldpc_encode, ldpc_decode
 
 class TestOFDMSystem(unittest.TestCase):
     def setUp(self):
@@ -58,12 +57,10 @@ class TestOFDMSystem(unittest.TestCase):
         """测试导频插入功能"""
         # 生成测试数据
         # 测试导频插入
-        ofdm_symbol, pilot_indices, data_indices = insert_pilots(self.cfg)
+        ofdm_symbol = insert_pilots(self.cfg)
         
         # 验证输出
         self.assertEqual(len(ofdm_symbol), self.cfg.n_fft)
-        self.assertTrue(np.all(np.abs(ofdm_symbol[pilot_indices]) > 0))
-        self.assertTrue(np.all(np.abs(ofdm_symbol[data_indices]) > 0))
         
     def test_ofdm_tx_rx(self):
         """测试OFDM收发端功能"""
@@ -100,7 +97,10 @@ class TestOFDMSystem(unittest.TestCase):
         rx_syms, rx_bits = ofdm_rx(rx_signal, self.cfg)
         # 计算误码率
         bits_error = np.mean(rx_bits != bits)
-        print(f'ldpc bit error:{bits_error}')
+        if self.cfg.code_rate < 1.0:
+            print(f'ldpc bit error:{bits_error}')
+        else:
+            print(f'hard decision bit error:{bits_error}')
         # 绘制星座图
         plt.figure(figsize=(10, 5))
         data_indices = self.cfg.get_data_symbol_indices()
@@ -124,19 +124,21 @@ class TestOFDMSystem(unittest.TestCase):
         plt.xlabel('实部')
         plt.ylabel('虚部')
         plt.legend()
-        
+
         plt.tight_layout()
         plt.show()
-        
+        plt.close()
 
     def test_multipath_channel(self):
         """测试多径信道功能"""
         # 生成测试信号
-        tx = np.random.randn(1000) + 1j * np.random.randn(1000)
+        tx = (np.random.randn(1000) + 1j * np.random.randn(1000)) / np.sqrt(2)
         snr_db_target = 20
+        sigScale = 10**(snr_db_target/20)
+        tx = tx * sigScale
         rx, h = multipath_channel(tx, snr_db_target, num_rx=self.cfg.num_rx_ant)
         meas_snr = np.mean(np.abs(np.convolve(tx, h,'same'))**2) / np.mean(np.abs(rx - np.convolve(tx,h,'same'))**2)
-        print(10*np.log10(meas_snr))   # 应接近 20 dB
+        print(f'multipath channel snr is {10*np.log10(meas_snr)} dB')   # 应接近 20 dB
 
     def test_multi_antenna_reception(self):
         """测试多天线接收流程"""
@@ -174,10 +176,10 @@ class TestOFDMSystem(unittest.TestCase):
         time_signal, freq_symbols = ofdm_tx(bits, self.cfg)
         
         # 添加AWGN噪声
-        snr_db = 0
+        snr_db = self.cfg.snr_db
         #计算噪声线性值
         noise_var = 10 ** (-snr_db / 10)
-        rx_signal, h_channel = multipath_channel(
+        rx_signal = awgn_channel(
             time_signal, snr_db, num_rx=self.cfg.num_rx_ant
         )
 
@@ -190,16 +192,21 @@ class TestOFDMSystem(unittest.TestCase):
         rx_symbols_equalized = channel_equalization(rx_symbols_freq_offset, h_est, noise_var)
         # 画出均衡后的信号和实际信号的星座图
         plt.figure()
+        plt.subplot(131)
         plt.scatter(rx_symbols_freq_offset.real, rx_symbols_freq_offset.imag,label='接收信号')
+        plt.subplot(132)
         plt.scatter(rx_symbols_equalized.real, rx_symbols_equalized.imag,label='均衡后')
+        plt.subplot(133)
         plt.scatter(freq_symbols.real, freq_symbols.imag,label='实际')
         plt.legend()
         plt.show()
-        print(f"信道估计误差: {h_est}")
+        plt.close()
+        print(f"信道估计结果: {h_est}")
 
 
 if __name__ == '__main__':
     # 创建测试套件
+    # unittest.main()
     suite = unittest.TestSuite()
     # 只添加信道估计测试
     suite.addTest(TestOFDMSystem('test_ofdm_tx_rx'))

@@ -93,16 +93,10 @@ def rayleigh_channel(
         ) / np.sqrt(2)
         h_sig = h
 
-    # 2) 计算噪声方差：Es/N0 (发射功率参考)
-    sig_power = np.mean(np.abs(signal) ** 2)          # 发射端平均功率
-    snr_lin   = 10.0 ** (snr_db / 10.0)
-    noise_var = sig_power / snr_lin                   # 复噪声单样本功率
-    noise_std = np.sqrt(noise_var / 2.0)              # (实/虚) 分量方差
-
     noise_shape = (num_rx, signal.shape[0]) if num_rx > 1 else signal.shape
-    noise = noise_std * (
-        rng.standard_normal(noise_shape) + 1j * rng.standard_normal(noise_shape)
-    )
+    noise = (
+        np.random.randn(*noise_shape) + 1j * np.random.randn(*noise_shape)
+    ) / np.sqrt(2)
 
     # 3) 通过信道 + 加噪
     if num_rx == 1:
@@ -178,15 +172,11 @@ def multipath_channel(
     # -------------------------------------------------
     # 5) AWGN 噪声，参照接收端功率设 SNR
     # -------------------------------------------------
-    rx_power = np.mean(np.abs(rx_wo_noise_single) ** 2)        # ≈1 (因我们已归一化)
-    snr_lin  = 10 ** (snr_db / 10)
-    noise_var = rx_power / snr_lin
-    noise_std = np.sqrt(noise_var / 2)                  # 单独对实/虚分量
 
     noise_shape = (num_rx, signal.shape[0]) if num_rx > 1 else signal.shape
-    noise = noise_std * (
-        rng.standard_normal(noise_shape) + 1j * rng.standard_normal(noise_shape)
-    )
+    noise = (
+        np.random.randn(*noise_shape) + 1j * np.random.randn(*noise_shape)
+    ) / np.sqrt(2)
 
     rx_signal = rx_wo_noise + noise
     return rx_signal, h
@@ -260,9 +250,20 @@ if __name__ == "__main__":
     # 创建测试配置
     cfg = OFDMConfig(
         n_fft=64,
+        n_subcarrier=32,
         cp_len=16,
         mod_order=4,  # 16QAM
-        num_symbols=10  # 测试用较少的符号数
+        num_symbols=10,  # 测试用较少的符号数
+        pilot_symbols=[2,5],
+        pilot_pattern='comb',
+        pilot_spacing=2,
+        est_method='linear',
+        interp_method='linear',
+        equalizer='zf',
+        est_time='fft_ml',
+        channel_type='awgn',
+        display_est_result=False,
+        code_rate=0.5,
     )
     
     # 生成测试信号

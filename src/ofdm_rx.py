@@ -11,7 +11,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from numpy.typing import NDArray
 import itertools
-from src.ofdm_tx import qam_modulation
+
 
 # plt.rcParams['font.sans-serif'] = ['SimHei']  # Windows 黑体
 plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']  # Windows 微软雅黑
@@ -25,27 +25,8 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.config import OFDMConfig
+from src.ofdm_tx import qam_modulation,ofdm_tx
 
-# def estimate_frequency_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray, 
-#                             pilot_indices: np.ndarray, cfg: OFDMConfig) -> float:
-#     """
-#     基于两帧导频的相位差（arctan公式）估计频偏
-#     """
-#     pilot_symbol_indices = cfg.get_pilot_symbol_indices()
-#     if len(pilot_symbol_indices) < 2:
-#         raise ValueError("至少需要两个含导频的OFDM符号用于频偏估计")
-#     idx1, idx2 = pilot_symbol_indices[:2]
-#     delta_t = idx2 - idx1
-
-#     # 标准信道补偿
-#     Y1 = rx_symbols[idx1, pilot_indices] / pilot_symbols
-#     Y2 = rx_symbols[idx2, pilot_indices] / pilot_symbols
-
-#     prod = np.conj(Y1) * Y2
-#     num = np.sum(np.imag(prod))
-#     den = np.sum(np.real(prod))
-#     eps_hat = (1 / (2 * np.pi * delta_t)) * np.arctan2(num, den)
-#     return eps_hat
 
 def estimate_frequency_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray, 
                             pilot_indices: np.ndarray, cfg: OFDMConfig) -> float:
@@ -159,7 +140,7 @@ def compensate_timing_offset(
     compensated : ndarray，与 ``rx_symbols`` 同形状
     """
 
-    k = np.arange(cfg.n_subcarrier)
+    k = np.arange(cfg.n_subcarrier)+cfg.get_subcarrier_offset()
     phase = np.exp(-1j * 2 * np.pi * timing_offset * k / cfg.n_fft).astype(
         rx_symbols.dtype
     )
@@ -280,7 +261,7 @@ def estimate_timing_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray,
         return estimate_timing_offset_fft_ml(rx_symbols, pilot_symbols, pilot_indices, cfg)
     elif cfg.est_time == 'diff_phase':
         return estimate_timing_offset_diff_phase(rx_symbols, pilot_symbols, pilot_indices, cfg)
-    elif cfg.est_time == 'ml_then_phase':
+    elif cfg.est_time == 'ml_then_phase': # 先FFT估计，再差分相位估计，不能提升精度
         coarse = estimate_timing_offset_fft_ml(rx_symbols, pilot_symbols, pilot_indices, cfg)
         compensated = compensate_timing_offset(rx_symbols, coarse, cfg)
         fine = estimate_timing_offset_diff_phase(compensated, pilot_symbols, pilot_indices, cfg)
@@ -314,7 +295,7 @@ def estimate_channel(
 
     if pilot_symbols is None or pilot_indices is None:
         pilot_symbols = cfg.get_pilot_symbols()
-        pilot_indices = cfg.get_pilot_indices()
+        pilot_indices = cfg.get_pilot_indices()-cfg.get_subcarrier_offset()
     pilot_symbol_indices = cfg.get_pilot_symbol_indices()
     # 使用接收信号的导频位置与本地导频计算信道响应
     # 修改索引方式，确保维度匹配
@@ -430,13 +411,18 @@ def noise_var_estimate(
     total_noise = 0
     total_rx = 0
     for i, sym_idx in enumerate(pilot_symbol_indices):
+        # 提取接收到的导频符号
         rx_pilot = rx_symbols[sym_idx, pilot_indices]
         h_est = Hest[sym_idx, pilot_indices]
+        # 计算每个导频位置的信道估计值
         rx_pilot_est = h_est * pilot_symbols
+        # 计算每个导频位置的噪声方差，残差平方和
         diff = rx_pilot - rx_pilot_est
         total_noise += np.mean(np.abs(diff) ** 2)
+        # 计算每个导频位置的信道估计值的功率
         total_rx += np.mean(np.abs(rx_pilot_est) ** 2)
-    return total_noise / len(pilot_symbol_indices), total_rx / len(pilot_symbol_indices)
+
+    return total_noise / len(pilot_symbol_indices), total_rx / len(pilot_symbol_indices) # 噪声方差和信道估计值的功率
 
 def channel_equalization(
     rx_symbols: NDArray[np.complex128],
@@ -585,9 +571,6 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
 
     num_ant = signal.shape[0]
 
-    # Lazily import LDPC utilities to avoid optional dependency at module load time
-    from src.fec import ldpc_decode, get_segment_lengths
-
     # 1. 移除循环前缀并进行FFT
     rx_symbols = remove_cp_and_fft(signal, cfg)
     
@@ -618,6 +601,7 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
         print(f"估计的SINR: {10*np.log10(RxPower/noise_var) :.2f} dB")
     #信道均衡
     rx_symbols_equalized = channel_equalization(signal_timing, h_est, noise_var)
+    
     rx_combined = np.mean(rx_symbols_equalized, axis=0)
     
     # 4. QAM 解调
@@ -631,6 +615,7 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     )
 
     if cfg.code_rate < 1.0:
+        from src.fec import ldpc_decode, get_segment_lengths
         _, n_segments = get_segment_lengths(cfg, cfg.code_rate)
         start = 0
         llr_list = []
@@ -648,32 +633,28 @@ if __name__ == "__main__":
     # 创建测试配置
     cfg = OFDMConfig(
         n_fft=256,
-        cp_len=16,
+        n_subcarrier=224,
+        cp_len=32,
         mod_order=4,  # 16QAM
         num_symbols=14,  # 测试用较少的符号数
         pilot_pattern='comb',
         pilot_spacing=2,  # 导频间隔
-        pilot_symbols=[1,5]  # 在第2和第11个符号上插入导频
+        pilot_symbols=[1,5],  # 在第2和第11个符号上插入导频
+        code_rate= 1
     )
-    
+    from src.ofdm_tx import compute_k
     # 生成随机比特流
     np.random.seed(42)
-    total_bits = cfg.get_total_bits()
-    bits = np.random.randint(0, 2, total_bits)
-    
-    # 使用ofdm_tx模块生成OFDM时域信号
-    from src.ofdm_tx import ofdm_tx, insert_pilots
-    
+    k = compute_k(cfg, cfg.code_rate)
+    test_bits = np.random.randint(0, 2, k)
     # 生成OFDM符号
-    time_signal, pilot_indices, data_indices, freq_symbols = ofdm_tx(bits, cfg)
+    time_signal, freq_symbols = ofdm_tx(test_bits, cfg)
     
     # 获取导频信息
     pilot_symbols = cfg.get_pilot_symbols()
-    
+    pilot_indices = cfg.get_pilot_indices()-cfg.get_subcarrier_offset()
     # 打印调试信息
     print(f"时域信号长度: {len(time_signal)}")
-    print(f"导频位置数量: {len(pilot_indices)}")
-    print(f"导频符号数量: {len(pilot_symbols)}")
     
     # 测试频偏估计和补偿
     print("\n测试频偏估计...")
@@ -721,15 +702,15 @@ if __name__ == "__main__":
     rx_symbols_timing = remove_cp_and_fft(signal_with_timing, cfg)
     rx_symbols_timing_compensation = np.zeros_like(rx_symbols_timing)
     # 估计时延
-    est_timing = estimate_timing_offset_fft_ml(rx_symbols_timing, pilot_symbols, pilot_indices, cfg)
+    est_timing = estimate_timing_offset_diff_phase(rx_symbols_timing, pilot_symbols, pilot_indices, cfg)
     print(f"实际时延: {timing_offset}")
     print(f"估计时延: {est_timing}")
     # 时延补偿
-    for i in range(rx_symbols_timing.shape[0]):
-        # 补偿相位旋转
-        phase_compensation = np.exp(-1j * 2 * np.pi *est_timing * np.arange(cfg.n_fft) / cfg.n_fft)
-        rx_symbols_timing_compensation[i] = rx_symbols_timing[i] * phase_compensation
-    
+    # for i in range(rx_symbols_timing.shape[0]):
+    #     # 补偿相位旋转
+    #     phase_compensation = np.exp(-1j * 2 * np.pi *est_timing * np.arange(cfg.n_subcarrier) / cfg.n_fft)
+    #     rx_symbols_timing_compensation[i] = rx_symbols_timing[i] * phase_compensation
+    rx_symbols_timing_compensation = compensate_timing_offset(rx_symbols_timing, est_timing, cfg)
     # 获取含导频的OFDM符号索引和数据OFDM符号索引
     pilot_symbol_indices = cfg.get_pilot_symbol_indices()
     data_symbol_indices = [i for i in range(cfg.num_symbols) if not cfg.has_pilot(i) or i not in pilot_symbol_indices]

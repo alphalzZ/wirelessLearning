@@ -26,6 +26,11 @@ from src.config import OFDMConfig
 
 import numpy as np
 
+def compute_k(cfg: OFDMConfig, rate: float) -> int:
+    """根据码率计算信息比特数"""
+    total_bits = cfg.get_total_bits()
+    return int(total_bits * rate)
+
 def qam_modulation(bits: np.ndarray, Qm: int) -> np.ndarray:
     """
     5G NR Gray-coded QAM (38.211 §5.1)
@@ -111,10 +116,10 @@ def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
     Returns:
         Tuple[np.ndarray, np.ndarray]: (时域信号, 频域符号)
     """
-    # FEC 编码
-    from src.fec import ldpc_encode, compute_k  # Lazy import to avoid optional dependency at module load time
+
 
     if cfg.code_rate < 1.0:
+        from src.fec import ldpc_encode  # Lazy import to avoid optional dependency at module load time
         k = compute_k(cfg, cfg.code_rate)
         if len(bits) != k:
             raise ValueError(f"信息比特长度应为{k}")
@@ -265,17 +270,17 @@ if __name__ == "__main__":
         num_symbols=14,  # 14个OFDM符号
         pilot_pattern='comb',
         pilot_spacing=2,  # 频域间隔改为2
-        pilot_symbols=[2,11]  # 只在第2和第11个符号上有导频
+        pilot_symbols=[2,11],  # 只在第2和第11个符号上有导频
+        code_rate= 1
     )
-    
     # 生成随机比特流
     np.random.seed(42)
-    total_bits = cfg.get_total_bits()
-    bits = np.random.randint(0, 2, size=total_bits)
+    k = compute_k(cfg, cfg.code_rate)
+    test_bits = np.random.randint(0, 2, k)
     
     # 测试完整的OFDM发送处理
     print("\n测试OFDM发送处理...")
-    time_signal, freq_symbols = ofdm_tx(bits, cfg)
+    time_signal, freq_symbols = ofdm_tx(test_bits, cfg)
     print(f"时域信号长度: {len(time_signal)}")
     print(f"时域信号功率: {np.mean(np.abs(time_signal)**2):.3f}")
     

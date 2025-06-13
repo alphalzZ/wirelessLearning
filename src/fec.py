@@ -27,17 +27,11 @@ project_root = str(Path(__file__).parent.parent)
 if project_root not in sys.path:
     sys.path.append(project_root)
 from src.config import OFDMConfig
-
+from src.ofdm_tx import compute_k
 # 3GPP NR LDPC 最大信息比特数
 MAX_LDPC_K = 8448
 # 3GPP NR LDPC 最大码字长度 (来自 Sionna 限制)
 MAX_LDPC_N = 316 * 384
-
-
-def compute_k(cfg: OFDMConfig, rate: float) -> int:
-    """根据码率计算信息比特数"""
-    total_bits = cfg.get_total_bits()
-    return int(total_bits * rate)
 
 
 def get_segment_lengths(cfg: OFDMConfig, rate: float) -> tuple[list[int], list[int]]:

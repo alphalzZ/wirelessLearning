@@ -13,7 +13,10 @@ import yaml
 class OFDMConfig:
     """OFDM系统配置参数"""
     # Tx配置
-    snr_db: float = 0
+    snr_db: float = 0                  # 信噪比
+    freq_offset: float = 0.0           # 初始频偏估计值
+    timing_offset: int = 0             # 初始定时偏移估计值
+    est_time: str = 'fft_ml'           # 定时偏移估计方法：'fft_ml'（FFT最大似然）/'diff_phase'（相位差）或'ml_then_phase'（两步法）
     channel_type: str = 'awgn'         # 信道类型：'awgn'（高斯白噪声）或'multipath'（多径衰落）
     display_est_result: bool = False    # 是否显示信道估计结果
     # 基本参数
@@ -36,18 +39,18 @@ class OFDMConfig:
     # 信道估计配置
     est_method: str = 'linear'         # 信道估计方法：'linear'（线性插值）或'ls'（最小二乘）
     interp_method: str = 'linear'      # 信道插值方式：'linear'或'nearest'
-    equalizer: str = 'zf'              # 均衡器类型：'zf'（零强制）或'mmse'（最小均方误差）
     est_time: str = 'fft_ml'           # 定时偏移估计方法：'fft_ml'（FFT最大似然）/'diff_phase'（相位差）或'ml_then_phase'（两步法）
     # 同步配置
     sync_method: str = 'auto'          # 同步方法：'auto'（自动）或'manual'（手动）
-    freq_offset: float = 0.0           # 初始频偏估计值
-    timing_offset: int = 0             # 初始定时偏移估计值
+
     _pilot_symbols_cache: Optional[np.ndarray] = None  # 新增缓存属性
     def __post_init__(self):
         """初始化后处理"""
         # 验证基本参数
         if self.n_fft <= 0 or not self._is_power_of_2(self.n_fft):
             raise ValueError("FFT大小必须是2的幂")
+        if self.n_fft < self.n_subcarrier+2*self.cp_len:
+            raise ValueError("FFT大小必须大于子载波数量+2*循环前缀长度")
         if self.cp_len <= 0:
             raise ValueError("循环前缀长度必须大于0")
         if self.mod_order not in [2, 4, 6]:
@@ -81,8 +84,6 @@ class OFDMConfig:
             raise ValueError("信道估计方法必须是'linear'或'ls'")
         if self.interp_method not in ['linear', 'nearest']:
             raise ValueError("插值方式必须是'linear'或'nearest'")
-        if self.equalizer not in ['zf', 'mmse']:
-            raise ValueError("均衡器类型必须是'zf'或'mmse'")
             
         # 验证同步配置
         if self.sync_method not in ['auto', 'manual']:
@@ -91,10 +92,12 @@ class OFDMConfig:
     def _is_power_of_2(self, n: int) -> bool:
         """检查一个数是否是2的幂"""
         return n > 0 and (n & (n - 1)) == 0
+    
     def set_n_subcarrier(self, n_subcarrier: int):
         self.n_subcarrier = n_subcarrier
         self._pilot_symbols_cache = None # 修改子载波数后，导频符号缓存失效
         self.get_pilot_symbols() # 重新生成导频符号
+
     def get_subcarrier_offset(self)->int:
         """获取子载波偏移"""
         return (self.n_fft-self.n_subcarrier)//2
