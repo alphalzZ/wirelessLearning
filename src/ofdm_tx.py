@@ -23,7 +23,6 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.config import OFDMConfig
-from src.fec import ldpc_encode, compute_k
 
 import numpy as np
 
@@ -51,8 +50,12 @@ def qam_modulation(bits: np.ndarray, Qm: int) -> np.ndarray:
         norm = np.sqrt(10)
 
     else:                           # 64-QAM  (±1, ±3, ±5, ±7)
-        i = (1 - 2 * b[:, 0]) * (1 + 2 * b[:, 1] + 4 * b[:, 2])
-        q = (1 - 2 * b[:, 3]) * (1 + 2 * b[:, 4] + 4 * b[:, 5])
+        i = (1 - 2 * b[:, 0]) * (
+            4 * b[:, 1] + 2 * np.bitwise_xor(b[:, 1], b[:, 2]) + 1
+        )
+        q = (1 - 2 * b[:, 3]) * (
+            4 * b[:, 4] + 2 * np.bitwise_xor(b[:, 4], b[:, 5]) + 1
+        )
         norm = np.sqrt(42)
 
     return (i + 1j * q) / norm
@@ -109,6 +112,8 @@ def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
         Tuple[np.ndarray, np.ndarray]: (时域信号, 频域符号)
     """
     # FEC 编码
+    from src.fec import ldpc_encode, compute_k  # Lazy import to avoid optional dependency at module load time
+
     if cfg.code_rate < 1.0:
         k = compute_k(cfg, cfg.code_rate)
         if len(bits) != k:
