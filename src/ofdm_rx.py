@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 from numpy.typing import NDArray
 import itertools
 from src.ofdm_tx import qam_modulation
-from src.fec import ldpc_decode, get_segment_lengths
 
 # plt.rcParams['font.sans-serif'] = ['SimHei']  # Windows 黑体
 plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']  # Windows 微软雅黑
@@ -586,6 +585,9 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
 
     num_ant = signal.shape[0]
 
+    # Lazily import LDPC utilities to avoid optional dependency at module load time
+    from src.fec import ldpc_decode, get_segment_lengths
+
     # 1. 移除循环前缀并进行FFT
     rx_symbols = remove_cp_and_fft(signal, cfg)
     
@@ -625,7 +627,7 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
         rx_combined[data_symbol_indices],
         cfg.mod_order,
         return_llr=True,
-        noise_var=noise_var,
+        noise_var=noise_var / RxPower,
     )
 
     if cfg.code_rate < 1.0:
