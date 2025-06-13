@@ -155,8 +155,8 @@ def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
         # 保存频域符号
         freq_symbols[i] = ofdm_symbol
         
-        # IFFT
-        time_symbol = np.fft.ifft(ofdm_symbol, cfg.n_fft)
+        # IFFT，乘以 sqrt(N) 使得时域/频域能量一致
+        time_symbol = np.fft.ifft(ofdm_symbol, cfg.n_fft) * np.sqrt(cfg.n_fft)
         
         # 添加循环前缀
         cp = time_symbol[-cfg.cp_len:]
@@ -164,7 +164,12 @@ def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
         
         # 添加到总信号
         time_signal = np.concatenate([time_signal, time_symbol])
-    
+
+    # 时域信号功率归一化
+    power = np.mean(np.abs(time_signal) ** 2)
+    if power > 0:
+        time_signal = time_signal / np.sqrt(power)
+
     return time_signal, freq_symbols
 
 def plot_ofdm_symbol(ofdm_symbol: np.ndarray, pilot_indices: np.ndarray, 
