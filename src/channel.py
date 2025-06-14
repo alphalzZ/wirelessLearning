@@ -17,12 +17,11 @@ if project_root not in sys.path:
 
 from src.config import OFDMConfig
 
-def awgn_channel(signal: np.ndarray, snr_db: float, num_rx: int = 1) -> np.ndarray:
+def awgn_channel(signal: np.ndarray, num_rx: int = 1) -> np.ndarray:
     """AWGN信道
 
     Args:
         signal: 输入信号
-        snr_db: 信噪比(dB)
 
     Returns:
         经过AWGN信道的信号
@@ -49,14 +48,9 @@ def awgn_channel(signal: np.ndarray, snr_db: float, num_rx: int = 1) -> np.ndarr
 
     return rx_signal
 
-import numpy as np
-from numpy.typing import NDArray
-from typing import Optional, Tuple
-
 
 def rayleigh_channel(
     signal: NDArray[np.complex128],
-    snr_db: float,
     *,
     block_fading: bool = True,
     rng: Optional[np.random.Generator] = None,
@@ -68,7 +62,6 @@ def rayleigh_channel(
     参数
     ----
     signal        : (N,)  发送复基带
-    snr_db        : 目标 SNR (功率比, dB)
     block_fading  : True  -> 整帧 1 个系数; False -> 每采样独立
     rng           : numpy.random.Generator, 可选
 
@@ -113,8 +106,7 @@ def rayleigh_channel(
 
 def multipath_channel(
     signal: NDArray[np.complex128],
-    snr_db: float,
-    num_paths: int = 4,
+    num_paths: int = 8,
     max_delay: int = 16,
     rng: Optional[np.random.Generator] = None,
     num_rx: int = 1,
@@ -125,7 +117,6 @@ def multipath_channel(
     参数
     ----
     signal     : (N,)  发送时域复基带
-    snr_db     : 目标平均 SNR (以 **接收端见到的符号功率** 为 1)
     num_paths  : 多径条数 (含直射 LOS / 最早径)
     max_delay  : 最大离散时延 (采样数, 含 0)
     rng        : numpy.random.Generator, 便于复现 (默认全局 RNG)
@@ -184,7 +175,6 @@ def multipath_channel(
 
 def sionna_fading_channel(
     signal: NDArray[np.complex128],
-    snr_db: float,
     *,
     block_fading: bool = True,
     num_rx: int = 1,
@@ -195,7 +185,7 @@ def sionna_fading_channel(
         from sionna.phy.channel import FlatFadingChannel
     except Exception as exc:  # pragma: no cover - optional dependency
         # 回退到本地实现
-        return rayleigh_channel(signal, snr_db, block_fading=block_fading, num_rx=num_rx)
+        return rayleigh_channel(signal, block_fading=block_fading, num_rx=num_rx)
 
     signal_tf = tf.constant(signal[None, :, None], dtype=tf.complex64)
     ch = FlatFadingChannel(
@@ -205,13 +195,12 @@ def sionna_fading_channel(
     )
     rx_tf = ch(signal_tf)
     rx_np = tf.squeeze(rx_tf).numpy().transpose()
-    rx_np = awgn_channel(rx_np, snr_db, num_rx=num_rx)
+    rx_np = awgn_channel(rx_np, num_rx=num_rx)
     return rx_np
 
 
 def sionna_tdl_channel(
     signal: NDArray[np.complex128],
-    snr_db: float,
     *,
     model: str = "C",
     delay_spread: float = 300e-9,
@@ -222,7 +211,7 @@ def sionna_tdl_channel(
     try:
         from sionna.phy.channel.tr38901 import TDL
     except Exception as exc:  # pragma: no cover - optional dependency
-        return multipath_channel(signal, snr_db, num_rx=num_rx)[0]
+        return multipath_channel(signal, num_rx=num_rx)[0]
 
     tdl = TDL(model, delay_spread, carrier_freq, num_rx_ant=num_rx, num_tx_ant=1)
     delays = tdl.delays.numpy()
@@ -243,7 +232,7 @@ def sionna_tdl_channel(
     else:
         rx = np.stack([np.convolve(signal, h[i], mode="same") for i in range(num_rx)], axis=0)
 
-    rx = awgn_channel(rx, snr_db, num_rx=num_rx)
+    rx = awgn_channel(rx, num_rx=num_rx)
     return rx
 
 if __name__ == "__main__":
@@ -268,26 +257,25 @@ if __name__ == "__main__":
     
     # 生成测试信号
     np.random.seed(42)
-    test_signal = np.random.randn(1000) + 1j * np.random.randn(1000)
-    test_signal = test_signal / np.sqrt(np.mean(np.abs(test_signal)**2))  # 功率归一化
+    test_signal = (np.random.randn(1000) + 1j * np.random.randn(1000)) / np.sqrt(2)
+    test_signal = test_signal * 10**(cfg.snr_db/20)
     
     # 测试AWGN信道
     print("测试AWGN信道...")
-    snr_db = 10
-    rx_awgn = awgn_channel(test_signal, snr_db)
+    rx_awgn = awgn_channel(test_signal)
     measured_snr = 10 * np.log10(np.mean(np.abs(test_signal)**2) / 
                                 np.mean(np.abs(rx_awgn - test_signal)**2))
-    print(f"目标SNR: {snr_db} dB")
+    print(f"目标SNR: {cfg.snr_db} dB")
     print(f"测量SNR: {measured_snr:.2f} dB")
     
     # 测试瑞利信道
     print("\n测试瑞利信道...")
-    rx_rayleigh, h_rayleigh = rayleigh_channel(test_signal, snr_db)
+    rx_rayleigh, h_rayleigh = rayleigh_channel(test_signal)
     print(f"信道响应形状: {h_rayleigh.shape}")
     print(f"信道响应功率: {np.mean(np.abs(h_rayleigh)**2):.3f}")
     
     # 测试多径信道
     print("\n测试多径信道...")
-    rx_multipath, h_multipath = multipath_channel(test_signal, snr_db)
+    rx_multipath, h_multipath = multipath_channel(test_signal)
     print(f"多径信道响应形状: {h_multipath.shape}")
     print(f"多径信道响应功率: {np.mean(np.abs(h_multipath)**2):.3f}") 

@@ -15,18 +15,17 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.config import OFDMConfig, load_config
-from src.ofdm_tx import ofdm_tx, add_timing_offset_and_freq_offset
+from src.ofdm_tx import ofdm_tx, add_timing_offset_and_freq_offset, compute_k
 from src.channel import awgn_channel, rayleigh_channel,multipath_channel, sionna_fading_channel, sionna_tdl_channel
 from src.ofdm_rx import ofdm_rx
 from src.metrics import calculate_ber, calculate_ser
-from src.fec import compute_k
 import matplotlib.pyplot as plt
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def run_single_experiment(snr_db: float, cfg: OFDMConfig) -> float:
+def run_single_experiment(cfg: OFDMConfig) -> float:
     """运行单次实验
     
     Args:
@@ -46,15 +45,15 @@ def run_single_experiment(snr_db: float, cfg: OFDMConfig) -> float:
     
     # 信道传输
     if cfg.channel_type == "awgn":
-        rx_signal = awgn_channel(tx_signal, snr_db, num_rx=cfg.num_rx_ant)
+        rx_signal = awgn_channel(tx_signal, num_rx=cfg.num_rx_ant)
     elif cfg.channel_type == "multipath":
-        rx_signal, _ = multipath_channel(tx_signal, snr_db, num_rx=cfg.num_rx_ant)
+        rx_signal, _ = multipath_channel(tx_signal, num_rx=cfg.num_rx_ant)
     elif cfg.channel_type == "rayleigh":
-        rx_signal, _ = rayleigh_channel(tx_signal, snr_db, num_rx=cfg.num_rx_ant)
+        rx_signal, _ = rayleigh_channel(tx_signal, num_rx=cfg.num_rx_ant)
     elif cfg.channel_type == "sionna_fading":
-        rx_signal = sionna_fading_channel(tx_signal, snr_db, num_rx=cfg.num_rx_ant)
+        rx_signal = sionna_fading_channel(tx_signal, num_rx=cfg.num_rx_ant)
     elif cfg.channel_type == "sionna_tdl":
-        rx_signal = sionna_tdl_channel(tx_signal, snr_db, num_rx=cfg.num_rx_ant)
+        rx_signal = sionna_tdl_channel(tx_signal, num_rx=cfg.num_rx_ant)
     rx_signal = add_timing_offset_and_freq_offset(rx_signal, cfg)
     # 接收端处理
     _, bits_rx = ofdm_rx(rx_signal, cfg)
@@ -70,7 +69,7 @@ def main():
     cfg = load_config(config_path)
     snr_db_list = np.arange(0, 31, 3)
     num_trials = 100  # 每个SNR点的仿真次数
-    num_carriers = [1536, 3276]
+    est_time_methods = ['fft_ml','diff_phase']
     
     # 创建结果目录
     results_dir = Path(__file__).parent.parent / "results"
@@ -80,37 +79,39 @@ def main():
     all_results = {}
     
     # 为每种方法运行仿真
-    for num_carrier in num_carriers:
-        cfg.set_n_subcarrier(num_carrier)
+    for est_time_method in est_time_methods:
+        cfg.est_time = est_time_method
         # 运行不同SNR下的实验
         results = []
         for snr_db in snr_db_list:
             # 存储当前SNR下的所有误码率
             current_ber = []
-            
+            cfg.snr_db = snr_db
             # 蒙特卡洛仿真
             for trial in range(num_trials):
-                ber = run_single_experiment(snr_db, cfg)
+                ber = run_single_experiment(cfg)
                 current_ber.append(ber)
             # 计算平均误码率
             avg_ber = np.mean(current_ber)
             results.append((snr_db, avg_ber))
-            logger.info(f"channel_type: {cfg.channel_type}, num_carrier: {num_carrier},"
+            logger.info(f"channel_type: {cfg.channel_type}, est_time_method: {est_time_method},"
                         f" SNR = {snr_db:2d} dB, BER = {avg_ber:.3e}")
             if avg_ber == 0:
                 break
         # 存储结果
-        all_results[num_carrier] = results
+        all_results[est_time_method] = results
         
         # 保存结果到文件
-        results_file = results_dir / f"results_{cfg.channel_type}_{num_carrier}.pkl"
+        results_file = results_dir / f"results_{cfg.channel_type}_{est_time_method}.pkl"
         with open(results_file, 'wb') as f:
             pickle.dump(results, f)
     
     # 绘制所有方法的BER vs SNR曲线
     plt.figure(figsize=(10, 5))
-    for num_carrier, results in all_results.items():
-        plt.semilogy(snr_db_list, [result[1] for result in results], 'o-', label=f'子载波{num_carrier}')
+    for est_time_method, results in all_results.items():
+        snr_db_list_act = [result[0] for result in results]
+        ber = [result[1] for result in results]
+        plt.semilogy(snr_db_list_act, ber, 'o-', label=f'时延估计：{est_time_method}')
     
     plt.grid(True)
     plt.xlabel('SNR (dB)')
@@ -119,7 +120,7 @@ def main():
     plt.legend()
     
     # 保存图片
-    plt.savefig(results_dir / f"ber_vs_snr_comparison_{cfg.channel_type}_{num_carrier}.png")
+    plt.savefig(results_dir / f"ber_vs_snr_comparison_{cfg.channel_type}_时延估计方法{est_time_method}.png")
     plt.show()
     plt.close()
 

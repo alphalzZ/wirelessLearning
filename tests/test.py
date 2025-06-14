@@ -74,21 +74,21 @@ class TestOFDMSystem(unittest.TestCase):
         # 添加噪声
         if self.cfg.channel_type == 'multipath':
             rx_signal, h_channel = multipath_channel(
-                tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant
+                tx_signal, num_rx=self.cfg.num_rx_ant
             )
         elif self.cfg.channel_type == 'awgn':
-            rx_signal = awgn_channel(tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant)
+            rx_signal = awgn_channel(tx_signal, num_rx=self.cfg.num_rx_ant)
         elif self.cfg.channel_type == 'rayleigh':
             rx_signal, h_channel = rayleigh_channel(
-                tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant
+                tx_signal, num_rx=self.cfg.num_rx_ant
             )
         elif self.cfg.channel_type == 'sionna_fading':
             rx_signal = sionna_fading_channel(
-                tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant
+                tx_signal, num_rx=self.cfg.num_rx_ant
             )
         elif self.cfg.channel_type == 'sionna_tdl':
             rx_signal = sionna_tdl_channel(
-                tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant
+                tx_signal, num_rx=self.cfg.num_rx_ant
             )
         else:
             raise ValueError(f"不支持的信道类型: {self.cfg.channel_type}")
@@ -146,7 +146,7 @@ class TestOFDMSystem(unittest.TestCase):
         k = compute_k(self.cfg, self.cfg.code_rate)
         bits = np.random.randint(0, 2, k)
         tx_signal, _ = ofdm_tx(bits, self.cfg)
-        rx_signal = awgn_channel(tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant)
+        rx_signal = awgn_channel(tx_signal, num_rx=self.cfg.num_rx_ant)
         _, rx_bits = ofdm_rx(rx_signal, self.cfg)
         self.assertEqual(len(rx_bits), len(bits))
 
@@ -157,7 +157,7 @@ class TestOFDMSystem(unittest.TestCase):
         info_bits = np.random.randint(0, 2, k)
 
         tx_signal, _ = ofdm_tx(info_bits, self.cfg)
-        rx_signal = awgn_channel(tx_signal, self.cfg.snr_db, num_rx=self.cfg.num_rx_ant)
+        rx_signal = awgn_channel(tx_signal, num_rx=self.cfg.num_rx_ant)
         _, dec_bits = ofdm_rx(rx_signal, self.cfg)
 
         ber = np.mean(dec_bits != info_bits)
@@ -180,7 +180,7 @@ class TestOFDMSystem(unittest.TestCase):
         #计算噪声线性值
         noise_var = 10 ** (-snr_db / 10)
         rx_signal = awgn_channel(
-            time_signal, snr_db, num_rx=self.cfg.num_rx_ant
+            time_signal, num_rx=self.cfg.num_rx_ant
         )
 
         # 移除CP并进行FFT

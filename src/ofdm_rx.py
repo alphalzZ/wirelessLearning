@@ -587,13 +587,8 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
         axis=0,
     )
     # 时延补偿
-    # signal_timing = np.roll(signal,est_timing)
     rx_symbols = remove_cp_and_fft(rx_symbols_freq_compensation, cfg)
-    phase_compensation = np.exp(
-        -1j * 2 * np.pi * est_timing * np.arange(cfg.n_subcarrier) / cfg.n_fft
-    )
-    signal_timing = rx_symbols * phase_compensation[None, None, :]
-    # rx_symbols_freq_compensation = remove_cp_and_fft(rx_symbols_freq_compensation, cfg)
+    signal_timing = compensate_timing_offset(rx_symbols, est_timing, cfg)
     # 3. 信道估计和均衡
     h_est = estimate_channel(signal_timing, cfg, pilot_symbols, pilot_indices)
     noise_var, RxPower = noise_var_estimate(signal_timing, h_est, cfg, pilot_symbols, pilot_indices)
@@ -601,7 +596,7 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
         print(f"估计的SINR: {10*np.log10(RxPower/noise_var) :.2f} dB")
     #信道均衡
     rx_symbols_equalized = channel_equalization(signal_timing, h_est, noise_var)
-    
+
     rx_combined = np.mean(rx_symbols_equalized, axis=0)
     
     # 4. QAM 解调
