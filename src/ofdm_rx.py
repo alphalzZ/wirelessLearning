@@ -385,49 +385,65 @@ def noise_var_estimate(
     pilot_indices=None,
 ) -> float:
     """噪声方差估计
-    使用真实发送的导频和用信道估计恢复的导频的残差估计噪声方差
+
+    根据导频符号的残差估计每个子载波的噪声方差。对于多天线输
+    入，返回所有天线平均后的结果。
+
     Args:
-        rx_symbols: 接收符号
-        Hest: 信道估计结果，包含所有ofdm符号的信道估计
-        cfg: 系统配置参数
+        rx_symbols: 接收符号，形状为 (Nsym, Nsub) 或 (Nant, Nsym, Nsub)
+        Hest:     信道估计结果，与 ``rx_symbols`` 形状兼容
+        cfg:      系统配置参数
+
     Returns:
-        float: 估计的噪声方差
+        Tuple[np.ndarray, np.ndarray]: ``(noise_var, rx_power)``，长度为
+        ``cfg.n_subcarrier`` 的噪声方差和导频功率估计
     """
     if pilot_symbols is None or pilot_indices is None:
         pilot_symbols = cfg.get_pilot_symbols()
-        pilot_indices = cfg.get_pilot_indices()
+        pilot_indices = cfg.get_pilot_indices() - cfg.get_subcarrier_offset()
     pilot_symbol_indices = cfg.get_pilot_symbol_indices()
-    
-    # 使用循环方式计算每个导频符号的噪声方差
-    if rx_symbols.ndim == 3:
-        est = [
-            noise_var_estimate(rs, hs, cfg, pilot_symbols, pilot_indices)
-            for rs, hs in zip(rx_symbols, Hest)
-        ]
-        noise = np.mean([n for n, _ in est])
-        power = np.mean([p for _, p in est])
-        return noise, power
 
-    total_noise = 0
-    total_rx = 0
-    for i, sym_idx in enumerate(pilot_symbol_indices):
-        # 提取接收到的导频符号
+    if rx_symbols.ndim == 3:
+        noise_list = []
+        power_list = []
+        for rs, hs in zip(rx_symbols, Hest):
+            n, p = noise_var_estimate(rs, hs, cfg, pilot_symbols, pilot_indices)
+            noise_list.append(n)
+            power_list.append(p)
+        return np.mean(noise_list, axis=0), np.mean(power_list, axis=0)
+
+    noise = np.zeros(cfg.n_subcarrier, dtype=np.float64)
+    power = np.zeros(cfg.n_subcarrier, dtype=np.float64)
+    count = np.zeros(cfg.n_subcarrier, dtype=np.float64)
+
+    for sym_idx in pilot_symbol_indices:
         rx_pilot = rx_symbols[sym_idx, pilot_indices]
         h_est = Hest[sym_idx, pilot_indices]
-        # 计算每个导频位置的信道估计值
         rx_pilot_est = h_est * pilot_symbols
-        # 计算每个导频位置的噪声方差，残差平方和
         diff = rx_pilot - rx_pilot_est
-        total_noise += np.mean(np.abs(diff) ** 2)
-        # 计算每个导频位置的信道估计值的功率
-        total_rx += np.mean(np.abs(rx_pilot_est) ** 2)
+        noise[pilot_indices] += np.abs(diff) ** 2
+        power[pilot_indices] += np.abs(rx_pilot_est) ** 2
+        count[pilot_indices] += 1
 
-    return total_noise / len(pilot_symbol_indices), total_rx / len(pilot_symbol_indices) # 噪声方差和信道估计值的功率
+    # 仅使用出现过导频的位置进行均值计算
+    valid = count > 0
+    noise_var = np.zeros(cfg.n_subcarrier, dtype=np.float64)
+    rx_pow = np.zeros(cfg.n_subcarrier, dtype=np.float64)
+    noise_var[valid] = noise[valid] / count[valid]
+    rx_pow[valid] = power[valid] / count[valid]
+
+    # 对没有导频的位置使用平均噪声方差进行填充
+    mean_noise = noise_var[valid].mean() if valid.any() else 0.0
+    mean_power = rx_pow[valid].mean() if valid.any() else 1.0
+    noise_var[~valid] = mean_noise
+    rx_pow[~valid] = mean_power
+
+    return noise_var, rx_pow
 
 def channel_equalization(
     rx_symbols: NDArray[np.complex128],
     h_est: NDArray[np.complex128],
-    noise_var: Optional[float] = None,
+    noise_var: Optional[np.ndarray | float] = None,
 ) -> NDArray[np.complex128]:
     """
     MMSE/ZF 频域均衡器
@@ -442,8 +458,8 @@ def channel_equalization(
         接收频域符号（去 CP、FFT 后）
     h_est      : shape (..., Nfft) 或 (Nfft,)
         频域信道估计；可按符号、天线广播
-    noise_var  : float, optional
-        复 AWGN 单复采样方差 σ²；若为 None 则默认为 0 (ZF)
+    noise_var  : float or ndarray, optional
+        每个子载波的噪声方差；若为 None 则默认为 0 (ZF)
 
     返回
     ----
@@ -593,7 +609,8 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     h_est = estimate_channel(signal_timing, cfg, pilot_symbols, pilot_indices)
     noise_var, RxPower = noise_var_estimate(signal_timing, h_est, cfg, pilot_symbols, pilot_indices)
     if cfg.display_est_result:
-        print(f"估计的SINR: {10*np.log10(RxPower/noise_var) :.2f} dB")
+        sinr = 10 * np.log10(np.mean(RxPower) / np.mean(noise_var))
+        print(f"估计的SINR: {sinr :.2f} dB")
     #信道均衡
     rx_symbols_equalized = channel_equalization(signal_timing, h_est, noise_var)
 
@@ -606,7 +623,7 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
         rx_combined[data_symbol_indices],
         cfg.mod_order,
         return_llr=True,
-        noise_var=noise_var / RxPower,
+        noise_var=float(np.mean(noise_var / RxPower)),
     )
 
     if cfg.code_rate < 1.0:
