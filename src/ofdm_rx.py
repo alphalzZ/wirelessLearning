@@ -395,8 +395,8 @@ def noise_var_estimate(
         cfg:      系统配置参数
 
     Returns:
-        Tuple[np.ndarray, np.ndarray]: ``(noise_var, rx_power)``，长度为
-        ``cfg.n_subcarrier`` 的噪声方差和导频功率估计
+        Tuple[np.ndarray, np.ndarray]: ``(noise_var, rx_power)``，形状为
+        ``(cfg.num_symbols, cfg.n_subcarrier)`` 的噪声方差和导频功率估计
     """
     if pilot_symbols is None or pilot_indices is None:
         pilot_symbols = cfg.get_pilot_symbols()
@@ -412,31 +412,52 @@ def noise_var_estimate(
             power_list.append(p)
         return np.mean(noise_list, axis=0), np.mean(power_list, axis=0)
 
-    noise = np.zeros(cfg.n_subcarrier, dtype=np.float64)
-    power = np.zeros(cfg.n_subcarrier, dtype=np.float64)
-    count = np.zeros(cfg.n_subcarrier, dtype=np.float64)
+    num_sym = rx_symbols.shape[0]
+    n_pil = len(pilot_symbol_indices)
 
-    for sym_idx in pilot_symbol_indices:
+    # 在导频符号上估计噪声功率
+    noise_pil = np.full((n_pil, cfg.n_subcarrier), np.nan, dtype=np.float64)
+    power_pil = np.full_like(noise_pil, np.nan)
+
+    for i, sym_idx in enumerate(pilot_symbol_indices):
         rx_pilot = rx_symbols[sym_idx, pilot_indices]
         h_est = Hest[sym_idx, pilot_indices]
         rx_pilot_est = h_est * pilot_symbols
         diff = rx_pilot - rx_pilot_est
-        noise[pilot_indices] += np.abs(diff) ** 2
-        power[pilot_indices] += np.abs(rx_pilot_est) ** 2
-        count[pilot_indices] += 1
+        noise_pil[i, pilot_indices] = np.abs(diff) ** 2
+        power_pil[i, pilot_indices] = np.abs(rx_pilot_est) ** 2
 
-    # 仅使用出现过导频的位置进行均值计算
-    valid = count > 0
-    noise_var = np.zeros(cfg.n_subcarrier, dtype=np.float64)
-    rx_pow = np.zeros(cfg.n_subcarrier, dtype=np.float64)
-    noise_var[valid] = noise[valid] / count[valid]
-    rx_pow[valid] = power[valid] / count[valid]
+    # 用每个导频符号上的均值填充非导频位置
+    for arr in (noise_pil, power_pil):
+        mean_val = np.nanmean(arr, axis=1, keepdims=True)
+        arr[:] = np.where(np.isnan(arr), mean_val, arr)
 
-    # 对没有导频的位置使用平均噪声方差进行填充
-    mean_noise = noise_var[valid].mean() if valid.any() else 0.0
-    mean_power = rx_pow[valid].mean() if valid.any() else 1.0
-    noise_var[~valid] = mean_noise
-    rx_pow[~valid] = mean_power
+    # 沿OFDM符号维度插值到所有符号
+    symbol_range = np.arange(num_sym)
+    if n_pil == 1:
+        noise_var = np.repeat(noise_pil, num_sym, axis=0)
+        noise_var = noise_var[:num_sym]
+        rx_pow = np.repeat(power_pil, num_sym, axis=0)
+        rx_pow = rx_pow[:num_sym]
+    else:
+        left_idx = np.searchsorted(pilot_symbol_indices, symbol_range, side="right") - 1
+        right_idx = left_idx + 1
+        left_idx = np.clip(left_idx, 0, n_pil - 1)
+        right_idx = np.clip(right_idx, 0, n_pil - 1)
+
+        left_pos = pilot_symbol_indices[left_idx]
+        right_pos = pilot_symbol_indices[right_idx]
+        denom = right_pos - left_pos
+        denom[denom == 0] = 1
+        alpha = ((symbol_range - left_pos) / denom)[:, None]
+
+        noise_left = noise_pil[left_idx]
+        noise_right = noise_pil[right_idx]
+        pow_left = power_pil[left_idx]
+        pow_right = power_pil[right_idx]
+
+        noise_var = (1 - alpha) * noise_left + alpha * noise_right
+        rx_pow = (1 - alpha) * pow_left + alpha * pow_right
 
     return noise_var, rx_pow
 
