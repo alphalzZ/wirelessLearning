@@ -66,7 +66,7 @@ def qam_modulation(bits: np.ndarray, Qm: int) -> np.ndarray:
     return (i + 1j * q) / norm
 
 
-def insert_pilots(cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def insert_pilots(cfg: OFDMConfig, symbol_idx: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """插入导频符号
     
     Args:
@@ -78,9 +78,9 @@ def insert_pilots(cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     # 获取导频位置和数据位置
     pilot_indices = cfg.get_pilot_indices()
-    
+
     # 生成导频符号
-    pilot_symbols = cfg.get_pilot_symbols()
+    pilot_symbols = cfg.get_pilot_symbols(symbol_idx)
     
     # 创建完整的OFDM符号
     ofdm_symbol = np.zeros(cfg.n_fft, dtype=np.complex64)
@@ -148,7 +148,7 @@ def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
             # 插入导频
             if cfg.display_est_result:
                 print(f'insert pilot at {i} symbol')
-            ofdm_symbol = insert_pilots(cfg)
+            ofdm_symbol = insert_pilots(cfg, i)
         else:
             # 提取当前符号的比特
             start_idx = k * bits_per_symbol
