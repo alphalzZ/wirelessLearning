@@ -356,7 +356,7 @@ def estimate_channel(
     if cfg.mod_order == 2:
         window_size = 1
     elif cfg.mod_order == 4:
-        window_size = 0
+        window_size = 2
     else:
         window_size = 4
     h_est_smooth = np.zeros_like(h_est)
@@ -509,7 +509,7 @@ def noise_var_estimate(
     if cfg.mod_order == 2:
         window_size = 1
     elif cfg.mod_order == 4:
-        window_size = 0
+        window_size = 2
     else:
         window_size = 4
     noise_smooth = np.zeros_like(noise_est)
@@ -579,9 +579,9 @@ def noise_covariance_estimate(
     cov_pil = np.zeros((len(pilot_indices), num_ant, num_ant), dtype=np.complex128)
     for idx_sc, sc in enumerate(pilot_indices):
         diffs = []
-        for sym_idx in pilot_symbol_indices:
+        for i,sym_idx in enumerate(pilot_symbol_indices):
             r = rx_symbols[:, sym_idx, sc]
-            est = Hest[:, sym_idx, sc] * pilot_symbols[idx_sc]
+            est = Hest[:, sym_idx, sc] * pilot_symbols[i,idx_sc]
             diffs.append((r - est)[:, None])
         diffs = np.hstack(diffs)
         cov_pil[idx_sc] = diffs @ diffs.conj().T / diffs.shape[1]
@@ -608,7 +608,7 @@ def noise_covariance_estimate(
     if cfg.mod_order == 2:
         window_size = 1
     elif cfg.mod_order == 4:
-        window_size = 1
+        window_size = 2
     else:
         window_size = 4
     cov_smooth = np.zeros_like(cov_full)
@@ -626,8 +626,7 @@ def channel_equalization(
     rx_symbols: NDArray[np.complex128],
     h_est: NDArray[np.complex128],
     noise_var: Optional[np.ndarray | float] = None,
-    method: str = "mmse",
-    noise_cov: Optional[np.ndarray] = None,
+    cfg: OFDMConfig = None,
 ) -> NDArray[np.complex128]:
     """
     MMSE/ZF 频域均衡器
@@ -653,7 +652,7 @@ def channel_equalization(
     if noise_var is None:
         noise_var = 0.0
 
-    method = method.lower()
+    method = cfg.equ_method.lower()
 
     eps = np.finfo(rx_symbols.dtype).eps
 
@@ -674,8 +673,7 @@ def channel_equalization(
         return numer / denom
 
     if method == "irc":
-        if noise_cov is None:
-            raise ValueError("noise_cov required for IRC")
+        noise_cov = noise_covariance_estimate(rx_symbols, h_est, cfg)
         if rx_symbols.ndim != 3:
             raise ValueError("IRC 仅适用于多天线输入")
 
@@ -847,8 +845,9 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
         sinr = 10 * np.log10(np.mean(RxPower) / np.mean(noise_var))
         print(f"估计的SINR: {sinr :.2f} dB")
     #信道均衡
-    rx_symbols_equalized = channel_equalization(signal_timing, h_est, noise_var, method="mmse")
-
+    rx_symbols_equalized = channel_equalization(signal_timing, h_est, noise_var, cfg)
+    if rx_symbols_equalized.ndim == 2:
+        rx_symbols_equalized = rx_symbols_equalized[None, :, :]  # 添加天线维度
     rx_combined = np.mean(rx_symbols_equalized, axis=0)
     
     # 4. QAM 解调

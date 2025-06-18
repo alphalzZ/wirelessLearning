@@ -69,7 +69,7 @@ def main():
     cfg = load_config(config_path)
     snr_db_list = np.arange(0, 31, 3)
     num_trials = 100  # 每个SNR点的仿真次数
-    est_time_methods = ['fft_ml','diff_phase']
+    eval_methods = ['mmse','mrc','irc']  # 评估方法列表
     
     # 创建结果目录
     results_dir = Path(__file__).parent.parent / "results"
@@ -79,8 +79,8 @@ def main():
     all_results = {}
     
     # 为每种方法运行仿真
-    for est_time_method in est_time_methods:
-        cfg.est_time = est_time_method
+    for eval_method in eval_methods:
+        cfg.equ_method = eval_method
         # 运行不同SNR下的实验
         results = []
         for snr_db in snr_db_list:
@@ -94,33 +94,33 @@ def main():
             # 计算平均误码率
             avg_ber = np.mean(current_ber)
             results.append((snr_db, avg_ber))
-            logger.info(f"channel_type: {cfg.channel_type}, est_time_method: {est_time_method},"
+            logger.info(f"channel_type: {cfg.channel_type}, eval_method: {eval_method},"
                         f" SNR = {snr_db:2d} dB, BER = {avg_ber:.3e}")
             if avg_ber == 0:
                 break
         # 存储结果
-        all_results[est_time_method] = results
+        all_results[eval_method] = results
         
         # 保存结果到文件
-        results_file = results_dir / f"results_{cfg.channel_type}_{est_time_method}.pkl"
+        results_file = results_dir / f"results_{cfg.channel_type}_{eval_method}.pkl"
         with open(results_file, 'wb') as f:
             pickle.dump(results, f)
     
     # 绘制所有方法的BER vs SNR曲线
     plt.figure(figsize=(10, 5))
-    for est_time_method, results in all_results.items():
+    for eval_method, results in all_results.items():
         snr_db_list_act = [result[0] for result in results]
         ber = [result[1] for result in results]
-        plt.semilogy(snr_db_list_act, ber, 'o-', label=f'时延估计：{est_time_method}')
+        plt.semilogy(snr_db_list_act, ber, 'o-', label=f'eval_method: {eval_method}')
     
     plt.grid(True)
     plt.xlabel('SNR (dB)')
     plt.ylabel('BER')
-    plt.title('不同子载波数的BER性能对比')
+    plt.title(f'mod:{cfg.mod_order} SNR vs BER性能对比')
     plt.legend()
     
     # 保存图片
-    plt.savefig(results_dir / f"ber_vs_snr_comparison_{cfg.channel_type}_时延估计方法{est_time_method}.png")
+    plt.savefig(results_dir / f"ber_vs_snr__chan_type{cfg.channel_type}_mod{cfg.mod_order}_numRx{cfg.num_rx_ant}_评估方法{eval_methods}.png")
     plt.show()
     plt.close()
 
