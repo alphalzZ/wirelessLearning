@@ -526,10 +526,59 @@ def noise_var_estimate(
 
     return noise_interp, power_interp
 
+
+def noise_covariance_estimate(
+    rx_symbols: np.ndarray,
+    Hest: np.ndarray,
+    cfg: OFDMConfig,
+    pilot_symbols: np.ndarray | None = None,
+    pilot_indices: np.ndarray | None = None,
+) -> np.ndarray:
+    """估计每个子载波的噪声协方差矩阵
+
+    仅在多天线场景下使用，根据导频残差计算 ``R = E[n n^H]``。
+
+    返回形状 ``(n_subcarrier, num_ant, num_ant)`` 的协方差矩阵数组。
+    """
+
+    if rx_symbols.ndim != 3:
+        raise ValueError("noise_covariance_estimate 仅适用于多天线输入")
+
+    if pilot_symbols is None or pilot_indices is None:
+        pilot_symbols = cfg.get_pilot_symbols()
+        pilot_indices = cfg.get_pilot_indices() - cfg.get_subcarrier_offset()
+    pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+
+    num_ant = rx_symbols.shape[0]
+    n_sub = cfg.n_subcarrier
+
+    cov_pil = np.zeros((len(pilot_indices), num_ant, num_ant), dtype=np.complex128)
+    for idx_sc, sc in enumerate(pilot_indices):
+        diffs = []
+        for sym_idx in pilot_symbol_indices:
+            r = rx_symbols[:, sym_idx, sc]
+            est = Hest[:, sym_idx, sc] * pilot_symbols[idx_sc]
+            diffs.append((r - est)[:, None])
+        diffs = np.hstack(diffs)
+        cov_pil[idx_sc] = diffs @ diffs.conj().T / diffs.shape[1]
+
+    cov_full = np.zeros((n_sub, num_ant, num_ant), dtype=np.complex128)
+    for sc in range(n_sub):
+        nearest = np.argmin(np.abs(pilot_indices - sc))
+        cov_full[sc] = cov_pil[nearest]
+
+    # 稍作正则化，避免奇异
+    for sc in range(n_sub):
+        cov_full[sc] += 1e-12 * np.eye(num_ant)
+
+    return cov_full
+
 def channel_equalization(
     rx_symbols: NDArray[np.complex128],
     h_est: NDArray[np.complex128],
     noise_var: Optional[np.ndarray | float] = None,
+    method: str = "mmse",
+    noise_cov: Optional[np.ndarray] = None,
 ) -> NDArray[np.complex128]:
     """
     MMSE/ZF 频域均衡器
@@ -549,23 +598,54 @@ def channel_equalization(
 
     返回
     ----
-    eq_symbols : 与 rx_symbols 同形状
-        均衡后的符号
+    eq_symbols : 与 rx_symbols 或 (num_symbols, Nfft) 同形状
+        均衡后的符号；当 ``method`` 为 ``mrc``/``irc`` 时返回合并结果
     """
     if noise_var is None:
         noise_var = 0.0
 
-    # 保证广播： h_est 可是一维 (Nfft,) 也可与 rx 符合
-    # conj(H) / (|H|^2 + σ²)
-    denom = np.abs(h_est) ** 2 + noise_var
-    # 防止 0/0；若 H≈0, 用 epsilon 保底, 避免 nan/inf
+    method = method.lower()
+
     eps = np.finfo(rx_symbols.dtype).eps
-    denom = np.maximum(denom, eps)
 
-    w_mmse = np.conj(h_est) / denom
-    eq_symbols = rx_symbols * w_mmse  # 广播乘
+    if method == "mmse":
+        denom = np.abs(h_est) ** 2 + noise_var
+        denom = np.maximum(denom, eps)
+        w = np.conj(h_est) / denom
+        return rx_symbols * w
 
-    return eq_symbols
+    # 多天线合并（MRC / IRC）
+    ant_axis = 0
+
+    if method == "mrc":
+        weight = np.conj(h_est)
+        numer = np.sum(weight * rx_symbols, axis=ant_axis)
+        denom = np.sum(np.abs(h_est) ** 2, axis=ant_axis)
+        denom = np.maximum(denom, eps)
+        return numer / denom
+
+    if method == "irc":
+        if noise_cov is None:
+            raise ValueError("noise_cov required for IRC")
+        if rx_symbols.ndim != 3:
+            raise ValueError("IRC 仅适用于多天线输入")
+
+        num_ant, num_sym, n_sub = rx_symbols.shape
+        eq = np.zeros((num_sym, n_sub), dtype=rx_symbols.dtype)
+        for k in range(n_sub):
+            R_inv = np.linalg.pinv(noise_cov[k])
+            for s in range(num_sym):
+                h = h_est[:, s, k]
+                r = rx_symbols[:, s, k]
+                w = R_inv @ h
+                denom = np.conj(h) @ w
+                if np.abs(denom) < eps:
+                    eq[s, k] = 0.0
+                else:
+                    eq[s, k] = (w.conj() @ r) / denom
+        return eq
+
+    raise ValueError(f"Unsupported equalization method: {method}")
 
 
 def remove_cp_and_fft(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
@@ -680,17 +760,36 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     offset = cfg.get_subcarrier_offset()
     pilot_symbols = cfg.get_pilot_symbols()
     pilot_indices = cfg.get_pilot_indices() - offset
-    est_timing = estimate_timing_offset(rx_symbols[0], pilot_symbols, pilot_indices, cfg)
-    est_freq_offset = estimate_frequency_offset(rx_symbols[0], pilot_symbols, pilot_indices, cfg)
+    est_timing = []
+    est_freq_offset = []
+    for a in range(num_ant):
+        est_timing.append(
+            estimate_timing_offset(rx_symbols[a], pilot_symbols, pilot_indices, cfg)
+        )
+        est_freq_offset.append(
+            estimate_frequency_offset(rx_symbols[a], pilot_symbols, pilot_indices, cfg)
+        )
+    est_timing = np.array(est_timing)
+    est_freq_offset = np.array(est_freq_offset)
     if cfg.display_est_result:
         print(f"估计的时延: {est_timing}, 估计的频偏: {est_freq_offset}")
-    rx_symbols_freq_compensation = np.stack(
-        [compensate_frequency_offset(signal[a], est_freq_offset, cfg) for a in range(num_ant)],
+
+    signal_freq_comp = np.stack(
+        [
+            compensate_frequency_offset(signal[a], est_freq_offset[a], cfg)
+            for a in range(num_ant)
+        ],
         axis=0,
     )
-    # 时延补偿
-    rx_symbols = remove_cp_and_fft(rx_symbols_freq_compensation, cfg)
-    signal_timing = compensate_timing_offset(rx_symbols, est_timing, cfg)
+
+    rx_symbols = remove_cp_and_fft(signal_freq_comp, cfg)
+    signal_timing = np.stack(
+        [
+            compensate_timing_offset(rx_symbols[a], est_timing[a], cfg)
+            for a in range(num_ant)
+        ],
+        axis=0,
+    )
     # 3. 信道估计和均衡
     h_est = estimate_channel(signal_timing, cfg, pilot_symbols, pilot_indices)
     noise_var, RxPower = noise_var_estimate(signal_timing, h_est, cfg, pilot_symbols, pilot_indices)
@@ -698,7 +797,7 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
         sinr = 10 * np.log10(np.mean(RxPower) / np.mean(noise_var))
         print(f"估计的SINR: {sinr :.2f} dB")
     #信道均衡
-    rx_symbols_equalized = channel_equalization(signal_timing, h_est, noise_var)
+    rx_symbols_equalized = channel_equalization(signal_timing, h_est, noise_var, method="mmse")
 
     rx_combined = np.mean(rx_symbols_equalized, axis=0)
     
