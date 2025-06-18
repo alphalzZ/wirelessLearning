@@ -28,8 +28,12 @@ from src.config import OFDMConfig
 from src.ofdm_tx import qam_modulation,ofdm_tx
 
 
-def estimate_frequency_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray, 
-                            pilot_indices: np.ndarray, cfg: OFDMConfig) -> float:
+def estimate_frequency_offset(
+    rx_symbols: np.ndarray,
+    pilot_symbols: np.ndarray,
+    pilot_indices: np.ndarray,
+    cfg: OFDMConfig,
+) -> float:
     """
     基于两帧导频的相位差估计频偏（支持非相邻导频符号）
     """
@@ -50,10 +54,12 @@ def estimate_frequency_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray,
     # 提取导频数据
     rx_pilot1 = rx_symbols[idx1, pilot_indices]
     rx_pilot2 = rx_symbols[idx2, pilot_indices]
-    
-    # 信道补偿
-    Y1 = rx_pilot1 / pilot_symbols
-    Y2 = rx_pilot2 / pilot_symbols
+
+    # 信道补偿，支持每个导频符号不同的序列
+    pil1 = pilot_symbols[0] if pilot_symbols.ndim == 2 else pilot_symbols
+    pil2 = pilot_symbols[1] if pilot_symbols.ndim == 2 else pilot_symbols
+    Y1 = rx_pilot1 / pil1
+    Y2 = rx_pilot2 / pil2
     
     # 计算相位差
     prod = np.conj(Y1) * Y2
@@ -146,8 +152,12 @@ def compensate_timing_offset(
     )
     return rx_symbols * phase[None, :]
 
-def estimate_timing_offset_diff_phase(rx_symbols: np.ndarray, pilot_symbols: np.ndarray, 
-                         pilot_indices: np.ndarray, cfg: OFDMConfig) -> int:
+def estimate_timing_offset_diff_phase(
+    rx_symbols: np.ndarray,
+    pilot_symbols: np.ndarray,
+    pilot_indices: np.ndarray,
+    cfg: OFDMConfig,
+) -> int:
     """使用导频符号估计符号定时偏移
     
     Args:
@@ -162,9 +172,9 @@ def estimate_timing_offset_diff_phase(rx_symbols: np.ndarray, pilot_symbols: np.
     # 使用接收信号的导频位置与本地导频计算信道响应
     # rx_pilots = rx_symbols[cfg.pilot_symbols, pilot_indices]
     # 创建行索引和列索引的网格
-    rx_pilots = np.zeros((len(cfg.pilot_symbols), len(pilot_indices)), dtype=rx_symbols.dtype)
-
-    for i, sym_idx in enumerate(cfg.pilot_symbols):
+    pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+    rx_pilots = np.zeros((len(pilot_symbol_indices), len(pilot_indices)), dtype=rx_symbols.dtype)
+    for i, sym_idx in enumerate(pilot_symbol_indices):
         rx_pilots[i, :] = rx_symbols[sym_idx, pilot_indices]
 
     # 使用广播机制提取数据
@@ -191,8 +201,13 @@ def estimate_timing_offset_diff_phase(rx_symbols: np.ndarray, pilot_symbols: np.
     
     return timing_offset
 
-def estimate_timing_offset_fft_ml(rx_symbols: np.ndarray, pilot_symbols: np.ndarray, 
-                                 pilot_indices: np.ndarray, cfg: OFDMConfig, ml_fft_size: int = 1024) -> float:
+def estimate_timing_offset_fft_ml(
+    rx_symbols: np.ndarray,
+    pilot_symbols: np.ndarray,
+    pilot_indices: np.ndarray,
+    cfg: OFDMConfig,
+    ml_fft_size: int = 1024,
+) -> float:
     """使用FFT最大似然估计符号定时偏移
     
     Args:
@@ -205,8 +220,9 @@ def estimate_timing_offset_fft_ml(rx_symbols: np.ndarray, pilot_symbols: np.ndar
         int: 估计的定时偏移量
     """
     # 提取导频位置的接收信号
-    rx_pilots = np.zeros((len(cfg.pilot_symbols), len(pilot_indices)), dtype=rx_symbols.dtype)
-    for i, sym_idx in enumerate(cfg.pilot_symbols):
+    pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+    rx_pilots = np.zeros((len(pilot_symbol_indices), len(pilot_indices)), dtype=rx_symbols.dtype)
+    for i, sym_idx in enumerate(pilot_symbol_indices):
         rx_pilots[i, :] = rx_symbols[sym_idx, pilot_indices]
     # 使用广播机制提取数据
     h_pilot = rx_pilots / pilot_symbols
@@ -294,9 +310,11 @@ def estimate_channel(
         return np.stack(est, axis=0)
 
     if pilot_symbols is None or pilot_indices is None:
-        pilot_symbols = cfg.get_pilot_symbols()
-        pilot_indices = cfg.get_pilot_indices()-cfg.get_subcarrier_offset()
-    pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+        pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+        pilot_symbols = cfg.get_pilot_symbols(pilot_symbol_indices)
+        pilot_indices = cfg.get_pilot_indices() - cfg.get_subcarrier_offset()
+    else:
+        pilot_symbol_indices = cfg.get_pilot_symbol_indices()
     # 使用接收信号的导频位置与本地导频计算信道响应
     # 修改索引方式，确保维度匹配
     rx_pilots = np.zeros((len(pilot_symbol_indices), cfg.n_subcarrier), dtype=np.complex64)
@@ -304,8 +322,9 @@ def estimate_channel(
         rx_pilots[i] = rx_symbols[sym_idx]
     
     #将rx_pilots和rx_symbols的维度对齐
-    pilot_symbols_pad = np.zeros(cfg.n_subcarrier, dtype=np.complex64)
-    pilot_symbols_pad[pilot_indices] = pilot_symbols
+    pilot_symbols_pad = np.zeros((len(pilot_symbol_indices), cfg.n_subcarrier), dtype=np.complex64)
+    for i in range(len(pilot_symbol_indices)):
+        pilot_symbols_pad[i, pilot_indices] = pilot_symbols[i]
 
     # 计算每个导频位置的信道响应，使用共轭相乘
     h_pilot = rx_pilots * np.conj(pilot_symbols_pad)
@@ -389,9 +408,11 @@ def noise_var_estimate_basic(
     与旧版保持一致，返回单个噪声方差与功率均值，便于性能比较。
     """
     if pilot_symbols is None or pilot_indices is None:
-        pilot_symbols = cfg.get_pilot_symbols()
+        pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+        pilot_symbols = cfg.get_pilot_symbols(pilot_symbol_indices)
         pilot_indices = cfg.get_pilot_indices() - cfg.get_subcarrier_offset()
-    pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+    else:
+        pilot_symbol_indices = cfg.get_pilot_symbol_indices()
 
     if rx_symbols.ndim == 3:
         est = [
@@ -404,10 +425,10 @@ def noise_var_estimate_basic(
 
     total_noise = 0.0
     total_rx = 0.0
-    for sym_idx in pilot_symbol_indices:
+    for i, sym_idx in enumerate(pilot_symbol_indices):
         rx_pilot = rx_symbols[sym_idx, pilot_indices]
         h_est = Hest[sym_idx, pilot_indices]
-        rx_pilot_est = h_est * pilot_symbols
+        rx_pilot_est = h_est * pilot_symbols[i]
         diff = rx_pilot - rx_pilot_est
         total_noise += np.mean(np.abs(diff) ** 2)
         total_rx += np.mean(np.abs(rx_pilot_est) ** 2)
@@ -428,9 +449,11 @@ def noise_var_estimate(
     与 :func:`estimate_channel` 相同的滑动平均与插值方式进行平滑。
     """
     if pilot_symbols is None or pilot_indices is None:
-        pilot_symbols = cfg.get_pilot_symbols()
+        pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+        pilot_symbols = cfg.get_pilot_symbols(pilot_symbol_indices)
         pilot_indices = cfg.get_pilot_indices() - cfg.get_subcarrier_offset()
-    pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+    else:
+        pilot_symbol_indices = cfg.get_pilot_symbol_indices()
 
     # 多天线场景：对各天线分别估计后取均值
     if rx_symbols.ndim == 3:
@@ -447,13 +470,14 @@ def noise_var_estimate(
     noise_pil = np.zeros((n_pil, cfg.n_subcarrier))
     power_pil = np.zeros_like(noise_pil)
 
-    pilot_pad = np.zeros(cfg.n_subcarrier, dtype=np.complex64)
-    pilot_pad[pilot_indices] = pilot_symbols
+    pilot_pad = np.zeros((n_pil, cfg.n_subcarrier), dtype=np.complex64)
+    for i in range(n_pil):
+        pilot_pad[i, pilot_indices] = pilot_symbols[i]
 
     for i, sym_idx in enumerate(pilot_symbol_indices):
         rx_sym = rx_symbols[sym_idx]
         h_sym = Hest[sym_idx]
-        est = h_sym * pilot_pad
+        est = h_sym * pilot_pad[i]
         diff2 = np.abs(rx_sym - est) ** 2
         noise_pil[i, pilot_indices] = diff2[pilot_indices]
         power_pil[i, pilot_indices] = np.abs(est[pilot_indices]) ** 2
@@ -545,9 +569,11 @@ def noise_covariance_estimate(
         raise ValueError("noise_covariance_estimate 仅适用于多天线输入")
 
     if pilot_symbols is None or pilot_indices is None:
-        pilot_symbols = cfg.get_pilot_symbols()
+        pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+        pilot_symbols = cfg.get_pilot_symbols(pilot_symbol_indices)
         pilot_indices = cfg.get_pilot_indices() - cfg.get_subcarrier_offset()
-    pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+    else:
+        pilot_symbol_indices = cfg.get_pilot_symbol_indices()
 
     num_ant = rx_symbols.shape[0]
     n_sub = cfg.n_subcarrier
@@ -555,9 +581,9 @@ def noise_covariance_estimate(
     cov_pil = np.zeros((len(pilot_indices), num_ant, num_ant), dtype=np.complex128)
     for idx_sc, sc in enumerate(pilot_indices):
         diffs = []
-        for sym_idx in pilot_symbol_indices:
+        for i, sym_idx in enumerate(pilot_symbol_indices):
             r = rx_symbols[:, sym_idx, sc]
-            est = Hest[:, sym_idx, sc] * pilot_symbols[idx_sc]
+            est = Hest[:, sym_idx, sc] * pilot_symbols[i, idx_sc]
             diffs.append((r - est)[:, None])
         diffs = np.hstack(diffs)
         cov_pil[idx_sc] = diffs @ diffs.conj().T / diffs.shape[1]
@@ -758,7 +784,8 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     
     # 2. 使用导频进行频偏估计和补偿
     offset = cfg.get_subcarrier_offset()
-    pilot_symbols = cfg.get_pilot_symbols()
+    pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+    pilot_symbols = cfg.get_pilot_symbols(pilot_symbol_indices)
     pilot_indices = cfg.get_pilot_indices() - offset
     est_timing = []
     est_freq_offset = []
