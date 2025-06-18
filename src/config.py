@@ -41,6 +41,7 @@ class OFDMConfig:
     interp_method: str = 'linear'      # 信道插值方式：'linear'或'nearest'
     est_time: str = 'fft_ml'           # 定时偏移估计方法：'fft_ml'（FFT最大似然）/'diff_phase'（相位差）或'ml_then_phase'（两步法）
     equ_method: str = 'mmse'          # 信道均衡方法：'mmse'（最小均方误差）或'mrc'（最大比率合并）或'irc'
+    win_size: List[int] = field(default_factory=lambda: [8,1,2])  # 滑动窗口大小（用于信道估计）qpsk/16qam/64qam分别对应的窗口大小
     # 同步配置
     sync_method: str = 'auto'          # 同步方法：'auto'（自动）或'manual'（手动）
 

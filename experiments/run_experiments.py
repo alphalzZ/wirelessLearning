@@ -67,9 +67,9 @@ def main():
     # 加载配置
     config_path = Path(__file__).parent.parent / "config.yaml"
     cfg = load_config(config_path)
-    snr_db_list = np.arange(0, 31, 3)
+    snr_db_list = np.arange(10, 30, 3) 
     num_trials = 100  # 每个SNR点的仿真次数
-    eval_methods = ['mmse','mrc','irc']  # 评估方法列表
+    eval_methods = [[0,0,0],[1,1,1],[2,2,2],[4,4,4],[8,8,8]]  # 评估方法列表
     
     # 创建结果目录
     results_dir = Path(__file__).parent.parent / "results"
@@ -79,8 +79,8 @@ def main():
     all_results = {}
     
     # 为每种方法运行仿真
-    for eval_method in eval_methods:
-        cfg.equ_method = eval_method
+    for i,eval_method in enumerate(eval_methods):
+        cfg.win_size = eval_method
         # 运行不同SNR下的实验
         results = []
         for snr_db in snr_db_list:
@@ -99,7 +99,7 @@ def main():
             if avg_ber == 0:
                 break
         # 存储结果
-        all_results[eval_method] = results
+        all_results[i] = results
         
         # 保存结果到文件
         results_file = results_dir / f"results_{cfg.channel_type}_{eval_method}.pkl"

@@ -354,11 +354,11 @@ def estimate_channel(
     
     # 使用滑动平均计算每个窗口的信道响应，窗口大小为2*cfg.pilot_spacing+1
     if cfg.mod_order == 2:
-        window_size = 1
+        window_size = cfg.win_size[0]
     elif cfg.mod_order == 4:
-        window_size = 2
+        window_size = cfg.win_size[1]
     else:
-        window_size = 4
+        window_size = cfg.win_size[2]
     h_est_smooth = np.zeros_like(h_est)
     for i in range(len(pilot_symbol_indices)):
         for j in range(cfg.n_subcarrier):
@@ -507,11 +507,11 @@ def noise_var_estimate(
 
     # 滑动平均平滑
     if cfg.mod_order == 2:
-        window_size = 1
+        window_size = cfg.win_size[0]
     elif cfg.mod_order == 4:
-        window_size = 2
+        window_size = cfg.win_size[1]
     else:
-        window_size = 4
+        window_size = cfg.win_size[2]
     noise_smooth = np.zeros_like(noise_est)
     power_smooth = np.zeros_like(power_est)
     for i in range(n_pil):
@@ -606,11 +606,11 @@ def noise_covariance_estimate(
                 cov_full[sc, :, :] = cov_interp[right[0], :, :]
 
     if cfg.mod_order == 2:
-        window_size = 1
+        window_size = cfg.win_size[0]
     elif cfg.mod_order == 4:
-        window_size = 2
+        window_size = cfg.win_size[1]
     else:
-        window_size = 4
+        window_size = cfg.win_size[2]
     cov_smooth = np.zeros_like(cov_full)
     for j in range(n_sub):
         start = max(0, j - cfg.pilot_spacing)
