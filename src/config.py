@@ -43,7 +43,7 @@ class OFDMConfig:
     # 同步配置
     sync_method: str = 'auto'          # 同步方法：'auto'（自动）或'manual'（手动）
 
-    _pilot_symbols_cache: Optional[np.ndarray] = None  # 新增缓存属性
+    _pilot_symbols_cache: Optional[dict[int, np.ndarray]] = None  # 按符号缓存导频
     def __post_init__(self):
         """初始化后处理"""
         # 验证基本参数
@@ -151,14 +151,37 @@ class OFDMConfig:
                 indices.extend(range(start, start + block_size // 4))
             return np.array(indices)
     
-    def get_pilot_symbols(self) -> np.ndarray:
-        """生成并缓存导频符号，保证全局唯一"""
+    def get_pilot_symbols(self, symbol_idx: int | np.ndarray | None = None) -> np.ndarray:
+        """获取指定 OFDM 符号的导频序列
+
+        若 ``symbol_idx`` 为 ``None``，返回所有导频符号对应的序列矩阵。
+        ``symbol_idx`` 可以是单个整数或整数数组。
+        """
         if self._pilot_symbols_cache is None:
+            self._pilot_symbols_cache = {}
+
+        def gen(idx: int) -> np.ndarray:
+            rng = np.random.default_rng(idx)
             pilot_indices = self.get_pilot_indices()
-            pilot_bits = np.random.randint(0, 2, size=len(pilot_indices) * 2)
-            pilot_symbols = self._qpsk_modulate(pilot_bits)
-            self._pilot_symbols_cache = pilot_symbols * np.sqrt(self.pilot_power)
-        return self._pilot_symbols_cache
+            bits = rng.integers(0, 2, size=len(pilot_indices) * 2, dtype=np.int8)
+            syms = self._qpsk_modulate(bits) * np.sqrt(self.pilot_power)
+            return syms
+
+        if symbol_idx is None:
+            idx_list = self.get_pilot_symbol_indices()
+        else:
+            idx_list = np.atleast_1d(symbol_idx).astype(int)
+
+        out = []
+        for idx in idx_list:
+            if idx not in self._pilot_symbols_cache:
+                self._pilot_symbols_cache[idx] = gen(int(idx))
+            out.append(self._pilot_symbols_cache[idx])
+
+        if np.isscalar(symbol_idx):
+            return out[0]
+        else:
+            return np.stack(out, axis=0)
     
     def _qpsk_modulate(self, bits: np.ndarray) -> np.ndarray:
         """QPSK调制
