@@ -569,11 +569,9 @@ def noise_covariance_estimate(
         raise ValueError("noise_covariance_estimate 仅适用于多天线输入")
 
     if pilot_symbols is None or pilot_indices is None:
-        pilot_symbol_indices = cfg.get_pilot_symbol_indices()
-        pilot_symbols = cfg.get_pilot_symbols(pilot_symbol_indices)
+        pilot_symbols = cfg.get_pilot_symbols()
         pilot_indices = cfg.get_pilot_indices() - cfg.get_subcarrier_offset()
-    else:
-        pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+    pilot_symbol_indices = cfg.get_pilot_symbol_indices()
 
     num_ant = rx_symbols.shape[0]
     n_sub = cfg.n_subcarrier
@@ -581,23 +579,48 @@ def noise_covariance_estimate(
     cov_pil = np.zeros((len(pilot_indices), num_ant, num_ant), dtype=np.complex128)
     for idx_sc, sc in enumerate(pilot_indices):
         diffs = []
-        for i, sym_idx in enumerate(pilot_symbol_indices):
+        for sym_idx in pilot_symbol_indices:
             r = rx_symbols[:, sym_idx, sc]
-            est = Hest[:, sym_idx, sc] * pilot_symbols[i, idx_sc]
+            est = Hest[:, sym_idx, sc] * pilot_symbols[idx_sc]
             diffs.append((r - est)[:, None])
         diffs = np.hstack(diffs)
         cov_pil[idx_sc] = diffs @ diffs.conj().T / diffs.shape[1]
 
+    cov_interp = np.zeros((n_sub, num_ant, num_ant), dtype=np.complex128)
+    cov_interp[pilot_indices, ...] = cov_pil
     cov_full = np.zeros((n_sub, num_ant, num_ant), dtype=np.complex128)
     for sc in range(n_sub):
-        nearest = np.argmin(np.abs(pilot_indices - sc))
-        cov_full[sc] = cov_pil[nearest]
+        if sc in pilot_indices:
+            cov_full[sc, :, :] = cov_interp[sc, :, :]
+        else:
+            left = pilot_indices[pilot_indices < sc]
+            right = pilot_indices[pilot_indices > sc]
+            if len(left) > 0 and len(right) > 0:
+                l = left[-1]
+                r = right[0]
+                alpha = (sc - l) / (r - l)
+                cov_full[sc, :, :] = (1 - alpha) * cov_interp[l, :, :] + alpha * cov_interp[r, :, :]
+            elif len(left) > 0:
+                cov_full[sc, :, :] = cov_interp[left[-1], :, :]
+            else:
+                cov_full[sc, :, :] = cov_interp[right[0], :, :]
 
+    if cfg.mod_order == 2:
+        window_size = 1
+    elif cfg.mod_order == 4:
+        window_size = 1
+    else:
+        window_size = 4
+    cov_smooth = np.zeros_like(cov_full)
+    for j in range(n_sub):
+        start = max(0, j - cfg.pilot_spacing)
+        end = min(cfg.n_subcarrier, j + cfg.pilot_spacing + window_size)
+        cov_smooth[j, ...] = np.mean(cov_full[start:end, ...], axis=0)
     # 稍作正则化，避免奇异
     for sc in range(n_sub):
-        cov_full[sc] += 1e-12 * np.eye(num_ant)
+        cov_smooth[sc] += 1e-12 * np.eye(num_ant)
 
-    return cov_full
+    return cov_smooth
 
 def channel_equalization(
     rx_symbols: NDArray[np.complex128],
