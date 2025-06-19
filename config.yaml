@@ -5,9 +5,8 @@ mod_order: 6  # QPSK/16QAM/64QAM
 num_symbols: 14
 snr_db: 10
 n_subcarrier: 1536
-num_tx_ant: 1
+num_tx_ant: 2
 num_rx_ant: 2
-num_tx_ant: 1
 code_rate: 1 # 1 for no FEC, float for FEC
 pilot_pattern: comb
 pilot_spacing: 2
