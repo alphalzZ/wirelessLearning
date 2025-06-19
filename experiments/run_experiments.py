@@ -37,8 +37,7 @@ def run_single_experiment(cfg: OFDMConfig) -> float:
     """
     # 总bit
     k = compute_k(cfg, cfg.code_rate)
-    # 生成随机比特流
-    bits_tx = np.random.randint(0, 2, k)
+    bits_tx = np.random.randint(0, 2, (cfg.num_tx_ant, k))
     
     # 发送端处理
     tx_signal, _ = ofdm_tx(bits_tx, cfg)
@@ -59,7 +58,7 @@ def run_single_experiment(cfg: OFDMConfig) -> float:
     _, bits_rx = ofdm_rx(rx_signal, cfg)
     
     # 计算性能指标
-    ber = calculate_ber(bits_tx, bits_rx)
+    ber = calculate_ber(bits_tx[0], bits_rx)
 
     return ber
 
