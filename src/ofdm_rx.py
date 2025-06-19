@@ -237,27 +237,29 @@ def estimate_timing_offset_fft_ml(
         U = np.abs(u) ** 2
         # 找到最大值的索引
         max_indices = np.where(U == np.max(U))[0]
-        
-        # 确定主要峰值位置
-        if max_indices[0] > ml_fft_size - max_indices[-1]:
-            peak_idx = max_indices[-1]
-            inverse_flag = 1
+        if max_indices == 0 or max_indices == ml_fft_size - 1:
+            delta = 0
         else:
-            peak_idx = max_indices[0]
-            inverse_flag = 0
+            # 确定主要峰值位置
+            if max_indices[0] > ml_fft_size - max_indices[-1]:
+                peak_idx = max_indices[-1]
+                inverse_flag = 1
+            else:
+                peak_idx = max_indices[0]
+                inverse_flag = 0
+                
+            # Quinn/3点估计器计算分数偏移
+            beta_1 = np.real(u[peak_idx - 1] / u[peak_idx])
+            delta_1 = beta_1 / (1 - beta_1)
             
-        # Quinn/3点估计器计算分数偏移
-        beta_1 = np.real(u[peak_idx - 1] / u[peak_idx])
-        delta_1 = beta_1 / (1 - beta_1)
-        
-        beta_2 = np.real(u[peak_idx + 1] / u[peak_idx])
-        delta_2 = beta_2 / (beta_2 - 1)
-        
-        # 选择合适的delta值
-        if delta_1 > 0 and delta_2 > 0:
-            delta = delta_2
-        else:
-            delta = delta_1
+            beta_2 = np.real(u[peak_idx + 1] / u[peak_idx])
+            delta_2 = beta_2 / (beta_2 - 1)
+            
+            # 选择合适的delta值
+            if delta_1 > 0 and delta_2 > 0:
+                delta = delta_2
+            else:
+                delta = delta_1
             
         # 计算最终的定时偏移
         if inverse_flag:
