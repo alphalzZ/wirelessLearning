@@ -57,16 +57,16 @@ class TestOFDMSystem(unittest.TestCase):
         """测试导频插入功能"""
         # 生成测试数据
         # 测试导频插入
-        ofdm_symbol = insert_pilots(self.cfg)
-        
+        ofdm_symbol = insert_pilots(self.cfg, 0)
+
         # 验证输出
-        self.assertEqual(len(ofdm_symbol), self.cfg.n_fft)
+        self.assertEqual(ofdm_symbol.shape, (self.cfg.num_tx_ant, self.cfg.n_fft))
         
     def test_ofdm_tx_rx(self):
         """测试OFDM收发端功能"""
         # 生成随机比特流
         k = compute_k(self.cfg, self.cfg.code_rate)
-        bits = np.random.randint(0, 2, k)
+        bits = np.random.randint(0, 2, (self.cfg.num_tx_ant, k))
         
         # 发送端处理
         tx_signal, freq_symbols = ofdm_tx(bits, self.cfg)
@@ -96,7 +96,7 @@ class TestOFDMSystem(unittest.TestCase):
         # 接收端处理
         rx_syms, rx_bits = ofdm_rx(rx_signal, self.cfg)
         # 计算误码率
-        bits_error = np.mean(rx_bits != bits)
+        bits_error = np.mean(rx_bits != bits[0])
         if self.cfg.code_rate < 1.0:
             print(f'ldpc bit error:{bits_error}')
         else:
@@ -107,7 +107,7 @@ class TestOFDMSystem(unittest.TestCase):
         subcarrier_indices = self.cfg.get_subcarrier_indices()
         print(f'data loc is{data_indices}')
         # 绘制发送符号的星座图
-        freq_symbols_plot = freq_symbols[np.ix_(data_indices,subcarrier_indices)]
+        freq_symbols_plot = freq_symbols[0][np.ix_(data_indices, subcarrier_indices)]
         plt.subplot(121)
         plt.scatter(freq_symbols_plot.real, freq_symbols_plot.imag, c='b', marker='o', label='发送符号')
         plt.grid(True)
@@ -144,25 +144,25 @@ class TestOFDMSystem(unittest.TestCase):
         """测试多天线接收流程"""
         self.cfg.num_rx_ant = 4
         k = compute_k(self.cfg, self.cfg.code_rate)
-        bits = np.random.randint(0, 2, k)
+        bits = np.random.randint(0, 2, (self.cfg.num_tx_ant, k))
         tx_signal, _ = ofdm_tx(bits, self.cfg)
         rx_signal = awgn_channel(tx_signal, num_rx=self.cfg.num_rx_ant)
         _, rx_bits = ofdm_rx(rx_signal, self.cfg)
-        self.assertEqual(len(rx_bits), len(bits))
+        self.assertEqual(len(rx_bits), bits.shape[1])
 
     def test_ofdm_tx_rx_ldpc(self):
         """结合LDPC编译码的完整OFDM流程"""
         rate = self.cfg.code_rate
         k = compute_k(self.cfg, rate)
-        info_bits = np.random.randint(0, 2, k)
+        info_bits = np.random.randint(0, 2, (self.cfg.num_tx_ant, k))
 
         tx_signal, _ = ofdm_tx(info_bits, self.cfg)
         rx_signal = awgn_channel(tx_signal, num_rx=self.cfg.num_rx_ant)
         _, dec_bits = ofdm_rx(rx_signal, self.cfg)
 
-        ber = np.mean(dec_bits != info_bits)
+        ber = np.mean(dec_bits != info_bits[0])
         print('LDPC BER:', ber)
-        self.assertEqual(len(dec_bits), len(info_bits))
+        self.assertEqual(len(dec_bits), info_bits.shape[1])
 
 
     def test_ofdm_rx_with_channel_estimation(self):
@@ -170,7 +170,7 @@ class TestOFDMSystem(unittest.TestCase):
         # 生成随机比特流
         np.random.seed(42)
         k = compute_k(self.cfg, self.cfg.code_rate)
-        bits = np.random.randint(0, 2, k)
+        bits = np.random.randint(0, 2, (self.cfg.num_tx_ant, k))
         
         # 生成OFDM符号
         time_signal, freq_symbols = ofdm_tx(bits, self.cfg)
@@ -197,7 +197,7 @@ class TestOFDMSystem(unittest.TestCase):
         plt.subplot(132)
         plt.scatter(rx_symbols_equalized.real, rx_symbols_equalized.imag,label='均衡后')
         plt.subplot(133)
-        plt.scatter(freq_symbols.real, freq_symbols.imag,label='实际')
+        plt.scatter(freq_symbols[0].real, freq_symbols[0].imag,label='实际')
         plt.legend()
         plt.show()
         plt.close()

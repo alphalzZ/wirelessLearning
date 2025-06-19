@@ -25,6 +25,7 @@ class OFDMConfig:
     n_subcarrier: int = 3276           # 子载波数量
     mod_order: int = 4                 # 调制阶数（2:QPSK, 4:16QAM, 6:64QAM）
     num_symbols: int = 14             # OFDM符号数量
+    num_tx_ant: int = 1               # 发送天线数量
     num_rx_ant: int = 1               # 接收天线数量
     code_rate: float = 0.5             # 信道编码码率 (0<rate<=1)
     
@@ -59,6 +60,8 @@ class OFDMConfig:
             raise ValueError("调制阶数必须是2、4或6")
         if self.num_symbols <= 0:
             raise ValueError("OFDM符号数量必须大于0")
+        if self.num_tx_ant <= 0:
+            raise ValueError("发送天线数量必须大于0")
         if self.num_rx_ant <= 0:
             raise ValueError("接收天线数量必须大于0")
         if not (0 < self.code_rate <= 1):

@@ -66,7 +66,7 @@ def qam_modulation(bits: np.ndarray, Qm: int) -> np.ndarray:
     return (i + 1j * q) / norm
 
 
-def insert_pilots(cfg: OFDMConfig, symbol_idx: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def insert_pilots(cfg: OFDMConfig, symbol_idx: int) -> np.ndarray:
     """插入导频符号
     
     Args:
@@ -74,18 +74,22 @@ def insert_pilots(cfg: OFDMConfig, symbol_idx: int) -> Tuple[np.ndarray, np.ndar
         cfg: 系统配置参数
         
     Returns:
-        Tuple[np.ndarray, np.ndarray, np.ndarray]: (导频符号, 导频位置, 数据位置)
+        插入导频后的频域符号矩阵，shape (num_tx_ant, n_fft)
     """
     # 获取导频位置和数据位置
     pilot_indices = cfg.get_pilot_indices()
 
     # 生成导频符号
     pilot_symbols = cfg.get_pilot_symbols(symbol_idx)
-    
-    # 创建完整的OFDM符号
-    ofdm_symbol = np.zeros(cfg.n_fft, dtype=np.complex64)
-    ofdm_symbol[pilot_indices] = pilot_symbols
-    
+
+    ofdm_symbol = np.zeros((cfg.num_tx_ant, cfg.n_fft), dtype=np.complex64)
+    if pilot_symbols.ndim == 1:
+        ofdm_symbol[:, pilot_indices] = pilot_symbols[None, :]
+    else:
+        if pilot_symbols.shape[0] != cfg.num_tx_ant:
+            raise ValueError("pilot symbol dimension mismatch")
+        ofdm_symbol[:, pilot_indices] = pilot_symbols
+
     return ofdm_symbol
 def add_timing_offset_and_freq_offset(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     """添加定时偏移和频偏
@@ -98,11 +102,12 @@ def add_timing_offset_and_freq_offset(signal: np.ndarray, cfg: OFDMConfig) -> np
     phase_rotation = (
         2 * np.pi * cfg.freq_offset * np.arange(time_len) / cfg.n_fft
     )
+    phase = np.exp(1j * phase_rotation)
     if signal.ndim == 1:
-        signal = signal * np.exp(1j * phase_rotation)
+        signal = signal * phase
         signal = np.roll(signal, cfg.timing_offset)
     else:
-        signal = signal * np.exp(1j * phase_rotation)[None, :]
+        signal = signal * phase.reshape((1, -1))
         signal = np.roll(signal, cfg.timing_offset, axis=-1)
     return signal
 
@@ -116,68 +121,58 @@ def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
     Returns:
         Tuple[np.ndarray, np.ndarray]: (时域信号, 频域符号)
     """
+    bits = np.asarray(bits)
+    k = compute_k(cfg, cfg.code_rate)
+    if bits.ndim == 1:
+        bits = bits[None, :]
+    if bits.shape != (cfg.num_tx_ant, k):
+        raise ValueError(f"bits shape must be ({cfg.num_tx_ant}, {k})")
 
+    total_len = cfg.num_symbols * (cfg.n_fft + cfg.cp_len)
+    time_signal = np.zeros((cfg.num_tx_ant, total_len), dtype=np.complex64)
+    freq_symbols = np.zeros(
+        (cfg.num_tx_ant, cfg.num_symbols, cfg.n_fft), dtype=np.complex64
+    )
 
-    if cfg.code_rate < 1.0:
-        from src.fec import ldpc_encode  # Lazy import to avoid optional dependency at module load time
-        k = compute_k(cfg, cfg.code_rate)
-        if len(bits) != k:
-            raise ValueError(f"信息比特长度应为{k}")
-        code_blocks = ldpc_encode(bits.astype(np.int8), cfg, cfg.code_rate)
-        tx_bits = np.concatenate(code_blocks)
-    else:
-        total_bits = cfg.get_total_bits()
-        if len(bits) != total_bits:
-            raise ValueError(f"输入比特流长度必须是{total_bits}")
-        tx_bits = bits.astype(np.int8)
-
-    total_bits = cfg.get_total_bits()
-    
-    # 计算每个OFDM符号的比特数
     bits_per_symbol = cfg.get_total_bits_per_symbol()
-    
-    # 初始化时域信号数组和频域符号数组
-    time_signal = np.array([], dtype=np.complex64)
-    freq_symbols = np.zeros((cfg.num_symbols, cfg.n_fft), dtype=np.complex64)
     carrier_indices = cfg.get_subcarrier_indices()
-    # 处理每个OFDM符号
-    k = 0
-    for i in range(cfg.num_symbols):
-        # 检查当前符号是否需要插入导频
-        if cfg.has_pilot(i):
-            # 插入导频
-            if cfg.display_est_result:
-                print(f'insert pilot at {i} symbol')
-            ofdm_symbol = insert_pilots(cfg, i)
-        else:
-            # 提取当前符号的比特
-            start_idx = k * bits_per_symbol
-            end_idx = start_idx + bits_per_symbol
-            symbol_bits = tx_bits[start_idx:end_idx]
-            
-            # QAM调制
-            data_symbols = qam_modulation(symbol_bits, cfg.mod_order)
-            # 不插入导频，所有子载波都用于数据传输
-            
-            ofdm_symbol = np.zeros(cfg.n_fft, dtype=np.complex64)
-            ofdm_symbol[carrier_indices] = data_symbols
-            k += 1
-        # 保存频域符号
-        freq_symbols[i] = ofdm_symbol
-        
-        # IFFT，乘以 sqrt(N) 使得时域/频域能量一致
-        time_symbol = np.fft.ifft(ofdm_symbol, cfg.n_fft) * np.sqrt(cfg.n_fft)
-        
-        # 添加循环前缀
-        cp = time_symbol[-cfg.cp_len:]
-        time_symbol = np.concatenate([cp, time_symbol])
-        
-        # 添加到总信号
-        time_signal = np.concatenate([time_signal, time_symbol])
 
-    # 根据目标 SNR 缩放信号幅度，噪声功率在信道中固定为 1
+    for ant in range(cfg.num_tx_ant):
+        b = bits[ant]
+        if cfg.code_rate < 1.0:
+            from src.fec import ldpc_encode
+
+            code_blocks = ldpc_encode(b.astype(np.int8), cfg, cfg.code_rate)
+            tx_bits = np.concatenate(code_blocks)
+        else:
+            tx_bits = b.astype(np.int8)
+
+        idx = 0
+        for i in range(cfg.num_symbols):
+            if cfg.has_pilot(i):
+                if cfg.display_est_result:
+                    print(f"insert pilot at {i} symbol")
+                ofdm_symbol = insert_pilots(cfg, i)[ant]
+            else:
+                start_idx = idx * bits_per_symbol
+                end_idx = start_idx + bits_per_symbol
+                symbol_bits = tx_bits[start_idx:end_idx]
+                data_symbols = qam_modulation(symbol_bits, cfg.mod_order)
+
+                ofdm_symbol = np.zeros(cfg.n_fft, dtype=np.complex64)
+                ofdm_symbol[carrier_indices] = data_symbols
+                idx += 1
+
+            freq_symbols[ant, i] = ofdm_symbol
+
+            time_symbol = np.fft.ifft(ofdm_symbol, cfg.n_fft) * np.sqrt(cfg.n_fft)
+            cp = time_symbol[-cfg.cp_len:]
+            time_symbol = np.concatenate([cp, time_symbol])
+            start = i * (cfg.n_fft + cfg.cp_len)
+            time_signal[ant, start : start + cfg.n_fft + cfg.cp_len] = time_symbol
+
     sigScal = 10 ** (cfg.snr_db / 20)
-    time_signal = time_signal * sigScal
+    time_signal *= sigScal
 
     return time_signal, freq_symbols
 
