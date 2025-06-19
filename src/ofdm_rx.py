@@ -876,7 +876,99 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
         bits_rx = (llr < 0).astype(np.int8)
 
     return rx_combined, bits_rx
-
+def ofdm_rx_matlab(rx_symbols_real, rx_symbols_imag, pilot_symbol_indices, pilot_symbols_real, pilot_symbols_imag, pilot_indices,nfft,mod_order,plot=False):
+    # simulation with matlab
+    rx_symbols = rx_symbols_real+1j*rx_symbols_imag
+    pilot_symbols = pilot_symbols_real+1j*pilot_symbols_imag
+    pilot_indices = pilot_indices.astype(np.int32)
+    dummyCfg = OFDMConfig()
+    dummyCfg.pilot_symbols = pilot_symbol_indices.astype(np.int32)
+    dummyCfg.n_fft = nfft
+    dummyCfg.pilot_spacing = pilot_indices[1] - pilot_indices[0]
+    dummyCfg.n_subcarrier = rx_symbols.shape[2]
+    dummyCfg.num_rx_ant = rx_symbols.shape[0]
+    dummyCfg.interp_method = 'linear'
+    dummyCfg.mod_order = np.int8(mod_order)
+    dummyCfg.num_symbols = rx_symbols.shape[1]
+    dummyCfg.equ_method = 'irc'
+    est_timing = []
+    est_freq_offset = []
+    if pilot_symbols.ndim == 2:
+        for a in range(dummyCfg.num_rx_ant):
+            est_timing.append(
+                estimate_timing_offset_fft_ml(rx_symbols[a], pilot_symbols, pilot_indices, dummyCfg)
+            )
+    else:
+        est_timing = estimate_timing_offset_fft_ml(rx_symbols[0], pilot_symbols, pilot_indices, dummyCfg)
+        est_timing = [est_timing ] * dummyCfg.num_rx_ant
+    print(f'估计的时延：{est_timing}')
+    rx_symbols = np.stack(
+        [
+            compensate_timing_offset(rx_symbols[a], est_timing[a], dummyCfg)
+            for a in range(dummyCfg.num_rx_ant)
+        ],
+        axis=0
+    )
+    # est_freq_offset = estimate_frequency_offset(rx_symbols[0], pilot_symbols, pilot_indices, dummyCfg)
+    for a in range(dummyCfg.num_rx_ant):
+        est_freq_offset.append(
+            estimate_frequency_offset(rx_symbols[a], pilot_symbols, pilot_indices, dummyCfg)
+        )
+    print(f'估计的频偏：{est_freq_offset}')   
+    rx_symbols_freq_compensation = np.stack(
+        [
+            compensate_frequency_offset(rx_symbols[a], est_freq_offset[a], dummyCfg)
+            for a in range(dummyCfg.num_rx_ant)
+        ],
+        axis=0,
+    )
+    #channel est
+    # 3. 信道估计和均衡
+    h_est = estimate_channel(rx_symbols_freq_compensation, dummyCfg, pilot_symbols, pilot_indices)
+    # print('complet h est')
+    noise_var, RxPower = noise_var_estimate(rx_symbols_freq_compensation, h_est, dummyCfg, pilot_symbols, pilot_indices)
+    sinr = 10 * np.log10((np.mean(RxPower)) / np.mean(noise_var))
+    print(f"估计的SINR: {sinr :.2f} dB")
+    #信道均衡
+    noise_cov = noise_covariance_estimate(rx_symbols_freq_compensation, h_est, dummyCfg, pilot_symbols, pilot_indices)
+    rx_symbols_equalized = channel_equalization(rx_symbols_freq_compensation, h_est, noise_var,
+                                                 dummyCfg.equ_method,noise_cov)
+    # print('complet eq')
+    rx_combined = rx_symbols_equalized * 1.4125
+    np.save('./data/rx_combined.npy',rx_combined)
+    # 4. QAM 解调
+    data_symbol_indices = np.setdiff1d(np.linspace(0,dummyCfg.num_symbols-1,dummyCfg.num_symbols).astype(np.int32),dummyCfg.pilot_symbols)
+    
+    llr = qam_demodulation(
+        rx_combined[data_symbol_indices],
+        dummyCfg.mod_order,
+        return_llr=True,
+        noise_var=float(np.mean(noise_var / RxPower)),
+    ) 
+    if plot:  
+        plt.figure()
+        plt.scatter(rx_combined[data_symbol_indices].real, rx_combined[data_symbol_indices].imag, c='r', marker='.', label='接收符号')
+        plt.grid(True)
+        plt.title('接收符号星座图')
+        plt.xlabel('实部')
+        plt.ylabel('虚部')
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+        
+def debug(data_path):
+    data_symbol_indices = [0,1,3,4,5,6,7,8,9,10,12,13]
+    rx_combined = np.load(data_path + '\rx_combined.npy')
+    plt.figure()
+    plt.scatter(rx_combined[data_symbol_indices].real, rx_combined[data_symbol_indices].imag, c='r', marker='.', label='接收符号')
+    plt.grid(True)
+    plt.title('接收符号星座图')
+    plt.xlabel('实部')
+    plt.ylabel('虚部')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()   
+    
 if __name__ == "__main__":
     # 创建测试配置
     cfg = OFDMConfig(
