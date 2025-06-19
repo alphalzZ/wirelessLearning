@@ -26,6 +26,7 @@ class OFDMConfig:
     mod_order: int = 4                 # 调制阶数（2:QPSK, 4:16QAM, 6:64QAM）
     num_symbols: int = 14             # OFDM符号数量
     num_rx_ant: int = 1               # 接收天线数量
+    num_tx_ant: int = 1               # 发射天线数量
     code_rate: float = 0.5             # 信道编码码率 (0<rate<=1)
     
     # 导频配置
@@ -61,6 +62,8 @@ class OFDMConfig:
             raise ValueError("OFDM符号数量必须大于0")
         if self.num_rx_ant <= 0:
             raise ValueError("接收天线数量必须大于0")
+        if self.num_tx_ant <= 0:
+            raise ValueError("发射天线数量必须大于0")
         if not (0 < self.code_rate <= 1):
             raise ValueError("code_rate 必须在0到1之间")
             
@@ -244,7 +247,7 @@ class OFDMConfig:
         Returns:
             总比特数
         """
-        return self.get_num_data_carriers() * self.mod_order
+        return self.get_num_data_carriers() * self.mod_order * self.num_tx_ant
     
     def get_total_bits(self) -> int:
         """获取整个传输的总比特数
@@ -252,14 +255,19 @@ class OFDMConfig:
         Returns:
             总比特数
         """
-        return self.get_total_bits_per_symbol()*len(self.get_data_symbol_indices())
+        return (
+            self.get_total_bits_per_symbol()
+            * len(self.get_data_symbol_indices())
+        )
 
 def load_config(config_path: str) -> OFDMConfig:
     """从YAML文件加载配置"""
     with open(config_path, 'r', encoding='utf-8') as f:
         config_dict = yaml.safe_load(f)
-    return OFDMConfig(**config_dict) 
+    if 'num_tx_ant' not in config_dict:
+        config_dict['num_tx_ant'] = 1
+    return OFDMConfig(**config_dict)
 
 if __name__ == '__main__':
-    cfg = load_config(r'.\config.yaml')
+    cfg = load_config('./config.yaml')
     print(cfg.num_symbols)
