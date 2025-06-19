@@ -6,6 +6,7 @@ num_symbols: 14
 snr_db: 10
 n_subcarrier: 1536
 num_rx_ant: 2
+num_tx_ant: 1
 code_rate: 1 # 1 for no FEC, float for FEC
 pilot_pattern: comb
 pilot_spacing: 2
@@ -18,3 +19,4 @@ display_est_result: False  # 是否显示估计结果
 interp_method: linear  # linear or nearest
 equ_method: mrc  # mmse/mrc/irc
 win_size: [8,1,2]  # QPSK窗口大小（用于信道估计）
+

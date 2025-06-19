@@ -9,6 +9,7 @@ import numpy as np
 import sys
 from pathlib import Path
 import matplotlib.pyplot as plt
+import yaml
 
 # 添加项目根目录到Python路径
 project_root = str(Path(__file__).parent.parent)
@@ -204,6 +205,23 @@ class TestOFDMSystem(unittest.TestCase):
         print(f"信道估计结果: {h_est}")
 
 
+class TestNumTxAnt(unittest.TestCase):
+    def test_single_stream(self):
+        cfg = load_config('config.yaml')
+        self.assertEqual(cfg.num_tx_ant, 1)
+        expected = cfg.get_num_data_carriers() * cfg.mod_order * cfg.num_tx_ant
+        self.assertEqual(cfg.get_total_bits_per_symbol(), expected)
+
+    def test_two_streams(self):
+        with open('config.yaml', 'r', encoding='utf-8') as f:
+            cfg_dict = yaml.safe_load(f)
+        cfg_dict['num_tx_ant'] = 2
+        cfg = OFDMConfig(**cfg_dict)
+        expected = cfg.get_num_data_carriers() * cfg.mod_order * cfg.num_tx_ant
+        self.assertEqual(cfg.num_tx_ant, 2)
+        self.assertEqual(cfg.get_total_bits_per_symbol(), expected)
+
+
 if __name__ == '__main__':
     # 创建测试套件
     # unittest.main()
@@ -213,3 +231,4 @@ if __name__ == '__main__':
     # 运行测试
     runner = unittest.TextTestRunner()
     runner.run(suite)
+
