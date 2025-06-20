@@ -177,29 +177,26 @@ def estimate_timing_offset_diff_phase(
     for i, sym_idx in enumerate(pilot_symbol_indices):
         rx_pilots[i, :] = rx_symbols[sym_idx, pilot_indices]
 
-    # 使用广播机制提取数据
-    h_pilot = rx_pilots / pilot_symbols
+    if pilot_symbols.ndim == 3:
+        num_layer = pilot_symbols.shape[0]
+        h_layers = np.zeros((num_layer, *rx_pilots.shape), dtype=rx_pilots.dtype)
+        for l in range(num_layer):
+            hpilot = rx_pilots * np.conj(pilot_symbols[l])
+            for n in range(0, rx_pilots.shape[1], num_layer):
+                end = min(n + num_layer, rx_pilots.shape[1])
+                h_sum = np.sum(hpilot[:, n:end], axis=1)
+                h_layers[l, :, n:end] = h_sum[:, None]
+    else:
+        h_layers = rx_pilots / pilot_symbols
+        h_layers = h_layers[None, :, :]
         
-    # 计算导频位置的相位
-    phases = np.angle(h_pilot)
-    
-    # 计算相邻导频的相位差
-    phase_diff = np.diff(phases)
-    
-    # 处理相位跳变
-    phase_diff = np.unwrap(phase_diff)
-    
-    # 计算导频间隔
+    phases = np.angle(h_layers)
+    phase_diff = np.diff(phases, axis=-1)
+    phase_diff = np.unwrap(phase_diff, axis=-1)
     pilot_spacing = np.diff(pilot_indices)
-    
-    # 使用最小二乘法估计相位斜率
-    # 构建线性方程组：phase_diff = slope * pilot_spacing
-    slope = np.mean(phase_diff ) / np.mean(pilot_spacing)
-    
-    # 将相位斜率转换为采样点偏移
-    timing_offset = int(round(slope * cfg.n_fft / (2 * np.pi)))
-    
-    return timing_offset
+    slope = np.mean(phase_diff, axis=(1, 2)) / np.mean(pilot_spacing)
+    timing_offsets = np.round(slope * cfg.n_fft / (2 * np.pi)).astype(int)
+    return timing_offsets
 
 def estimate_timing_offset_fft_ml(
     rx_symbols: np.ndarray,
@@ -224,68 +221,77 @@ def estimate_timing_offset_fft_ml(
     rx_pilots = np.zeros((len(pilot_symbol_indices), len(pilot_indices)), dtype=rx_symbols.dtype)
     for i, sym_idx in enumerate(pilot_symbol_indices):
         rx_pilots[i, :] = rx_symbols[sym_idx, pilot_indices]
-    # 使用广播机制提取数据
-    h_pilot = rx_pilots / pilot_symbols
+    if pilot_symbols.ndim == 3:
+        num_layer = pilot_symbols.shape[0]
+        h_layers = np.zeros((num_layer, *rx_pilots.shape), dtype=rx_pilots.dtype)
+        for l in range(num_layer):
+            hpilot = rx_pilots * np.conj(pilot_symbols[l])
+            for n in range(0, rx_pilots.shape[1], num_layer):
+                end = min(n + num_layer, rx_pilots.shape[1])
+                h_sum = np.sum(hpilot[:, n:end], axis=1)
+                h_layers[l, :, n:end] = h_sum[:, None]
+    else:
+        h_layers = rx_pilots / pilot_symbols
+        h_layers = h_layers[None, :, :]
     
-    # 初始化定时偏移数组
     timing_offsets = []
-    
-    # 对每个导频符号进行处理
-    for t in range(rx_pilots.shape[0]):
-        # 对接收信号进行FFT
-        u = np.fft.fft(h_pilot[t, :], ml_fft_size)
-        U = np.abs(u) ** 2
-        # 找到最大值的索引
-        max_indices = np.where(U == np.max(U))[0]
-        if max_indices == 0 or max_indices == ml_fft_size - 1:
-            delta = 0
-        else:
-            # 确定主要峰值位置
-            if max_indices[0] > ml_fft_size - max_indices[-1]:
-                peak_idx = max_indices[-1]
-                inverse_flag = 1
-            else:
+    for l in range(h_layers.shape[0]):
+        offsets_layer = []
+        for t in range(h_layers.shape[1]):
+            u = np.fft.fft(h_layers[l, t], ml_fft_size)
+            U = np.abs(u) ** 2
+            max_indices = np.where(U == np.max(U))[0]
+            if max_indices[0] == 0 or max_indices[0] == ml_fft_size - 1:
                 peak_idx = max_indices[0]
-                inverse_flag = 0
-                
-            # Quinn/3点估计器计算分数偏移
-            beta_1 = np.real(u[peak_idx - 1] / u[peak_idx])
-            delta_1 = beta_1 / (1 - beta_1)
-            
-            beta_2 = np.real(u[peak_idx + 1] / u[peak_idx])
-            delta_2 = beta_2 / (beta_2 - 1)
-            
-            # 选择合适的delta值
-            if delta_1 > 0 and delta_2 > 0:
-                delta = delta_2
+                inverse_flag = int(peak_idx > ml_fft_size // 2)
+                delta = 0
             else:
-                delta = delta_1
-            
-        # 计算最终的定时偏移
-        if inverse_flag:
-            timing_offset = (peak_idx + delta - 1 - ml_fft_size) / ml_fft_size
-        else:
-            timing_offset = (peak_idx + delta - 1) / ml_fft_size
-            
-        timing_offsets.append(timing_offset)
-    
-    # 返回平均定时偏移
-    return np.mean(timing_offsets) * cfg.n_fft / cfg.pilot_spacing
-def estimate_timing_offset(rx_symbols: np.ndarray, pilot_symbols: np.ndarray,
-                         pilot_indices: np.ndarray, cfg: OFDMConfig) -> int:
+                if max_indices[0] > ml_fft_size - max_indices[-1]:
+                    peak_idx = max_indices[-1]
+                    inverse_flag = 1
+                else:
+                    peak_idx = max_indices[0]
+                    inverse_flag = 0
+
+                beta_1 = np.real(u[peak_idx - 1] / u[peak_idx])
+                delta_1 = beta_1 / (1 - beta_1)
+                beta_2 = np.real(u[peak_idx + 1] / u[peak_idx])
+                delta_2 = beta_2 / (beta_2 - 1)
+                if delta_1 > 0 and delta_2 > 0:
+                    delta = delta_2
+                else:
+                    delta = delta_1
+
+            if inverse_flag:
+                toff = (peak_idx + delta - 1 - ml_fft_size) / ml_fft_size
+            else:
+                toff = (peak_idx + delta - 1) / ml_fft_size
+            offsets_layer.append(toff)
+        timing_offsets.append(np.mean(offsets_layer))
+
+    timing_offsets = np.array(timing_offsets) * cfg.n_fft / cfg.pilot_spacing
+    return timing_offsets
+def estimate_timing_offset(
+    rx_symbols: np.ndarray,
+    pilot_symbols: np.ndarray,
+    pilot_indices: np.ndarray,
+    cfg: OFDMConfig,
+) -> np.ndarray | float:
     """估计符号定时偏移
     """
-    if cfg.est_time == 'fft_ml':
-        return estimate_timing_offset_fft_ml(rx_symbols, pilot_symbols, pilot_indices, cfg)
-    elif cfg.est_time == 'diff_phase':
-        return estimate_timing_offset_diff_phase(rx_symbols, pilot_symbols, pilot_indices, cfg)
-    elif cfg.est_time == 'ml_then_phase': # 先FFT估计，再差分相位估计，不能提升精度
+    if cfg.est_time == "fft_ml":
+        offsets = estimate_timing_offset_fft_ml(rx_symbols, pilot_symbols, pilot_indices, cfg)
+    elif cfg.est_time == "diff_phase":
+        offsets = estimate_timing_offset_diff_phase(rx_symbols, pilot_symbols, pilot_indices, cfg)
+    elif cfg.est_time == "ml_then_phase":
         coarse = estimate_timing_offset_fft_ml(rx_symbols, pilot_symbols, pilot_indices, cfg)
-        compensated = compensate_timing_offset(rx_symbols, coarse, cfg)
+        compensated = compensate_timing_offset(rx_symbols, coarse if np.isscalar(coarse) else coarse[0], cfg)
         fine = estimate_timing_offset_diff_phase(compensated, pilot_symbols, pilot_indices, cfg)
-        return coarse + fine
+        offsets = coarse + fine
     else:
         raise ValueError("不支持的定时偏移估计方法")
+
+    return offsets if np.size(offsets) > 1 else float(np.squeeze(offsets))
 
 def estimate_channel(
     rx_symbols: np.ndarray,
