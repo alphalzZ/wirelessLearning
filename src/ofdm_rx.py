@@ -33,42 +33,46 @@ def estimate_frequency_offset(
     pilot_symbols: np.ndarray,
     pilot_indices: np.ndarray,
     cfg: OFDMConfig,
-) -> float:
-    """
-    基于两帧导频的相位差估计频偏（支持非相邻导频符号）
-    """
+) -> np.ndarray | float:
+    """基于两帧导频的相位差估计频偏，支持多层 OCC 导频"""
+
     pilot_symbol_indices = cfg.get_pilot_symbol_indices()
     if len(pilot_symbol_indices) < 2:
         raise ValueError("至少需要两个含导频的OFDM符号用于频偏估计")
-    
-    # 选择前两个导频符号索引
+
     idx1, idx2 = pilot_symbol_indices[:2]
-    
+
     # 关键修复：计算实际符号间隔（考虑非相邻情况）
-    delta_symbols = idx2 - idx1  # 符号间隔数
-    
-    # 计算实际时间间隔（考虑CP长度）
-    symbol_duration = cfg.n_fft + cfg.cp_len  # 每个符号的总样本数（包括CP）
-    delta_t = delta_symbols * symbol_duration / cfg.n_fft  # 归一化的时间间隔
-    
-    # 提取导频数据
+    delta_symbols = idx2 - idx1
+    symbol_duration = cfg.n_fft + cfg.cp_len
+    delta_t = delta_symbols * symbol_duration / cfg.n_fft
+
     rx_pilot1 = rx_symbols[idx1, pilot_indices]
     rx_pilot2 = rx_symbols[idx2, pilot_indices]
 
-    # 信道补偿，支持每个导频符号不同的序列
-    pil1 = pilot_symbols[0] if pilot_symbols.ndim == 2 else pilot_symbols
-    pil2 = pilot_symbols[1] if pilot_symbols.ndim == 2 else pilot_symbols
-    Y1 = rx_pilot1 / pil1
-    Y2 = rx_pilot2 / pil2
-    
-    # 计算相位差
+    if pilot_symbols.ndim == 3:
+        num_layer = pilot_symbols.shape[0]
+        Y1 = np.zeros((num_layer, len(pilot_indices)), dtype=rx_symbols.dtype)
+        Y2 = np.zeros_like(Y1)
+        for l in range(num_layer):
+            hp1 = rx_pilot1 * np.conj(pilot_symbols[l, 0])
+            hp2 = rx_pilot2 * np.conj(pilot_symbols[l, 1])
+            for n in range(0, len(pilot_indices), num_layer):
+                end = min(n + num_layer, len(pilot_indices))
+                Y1[l, n:end] = np.sum(hp1[n:end])
+                Y2[l, n:end] = np.sum(hp2[n:end])
+    else:
+        pil1 = pilot_symbols[0] if pilot_symbols.ndim == 2 else pilot_symbols
+        pil2 = pilot_symbols[1] if pilot_symbols.ndim == 2 else pilot_symbols
+        Y1 = (rx_pilot1 / pil1)[None, :]
+        Y2 = (rx_pilot2 / pil2)[None, :]
+
     prod = np.conj(Y1) * Y2
-    num = np.sum(np.imag(prod))
-    den = np.sum(np.real(prod))
-    
-    # 估计频偏
+    num = np.sum(np.imag(prod), axis=1)
+    den = np.sum(np.real(prod), axis=1)
+
     eps_hat = (1 / (2 * np.pi * delta_t)) * np.arctan2(num, den)
-    return eps_hat
+    return eps_hat if np.size(eps_hat) > 1 else float(np.squeeze(eps_hat))
 
 def compensate_frequency_offset(
     signal: NDArray[np.complex128],
