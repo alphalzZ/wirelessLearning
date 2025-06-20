@@ -808,7 +808,8 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     # 2. 使用导频进行频偏估计和补偿
     offset = cfg.get_subcarrier_offset()
     pilot_symbol_indices = cfg.get_pilot_symbol_indices()
-    pilot_symbols = cfg.get_pilot_symbols(pilot_symbol_indices)
+    pilot_symbols = cfg.get_pilot_symbols(pilot_symbol_indices)#排列顺序为第一根天线第一个DMRS，第二根天线，第一个DMRS，第一根天线，第二个DMRS，...
+    pilot_symbols = pilot_symbols.reshape(cfg.num_tx_ant,len(pilot_symbol_indices), -1)  # (num_tx_ant, num_pilots, n_pilots)
     pilot_indices = cfg.get_pilot_indices() - offset
     est_timing = []
     est_freq_offset = []

@@ -49,7 +49,8 @@ def awgn_channel(
     ) / np.sqrt(2)
 
     # 恒等信道矩阵，将每个发送天线映射到对应接收天线
-    H = np.eye(num_rx, num_tx, dtype=np.complex128)
+    H = np.eye(num_tx)* np.exp(1j*np.random.randn(num_tx, num_tx))
+    H = np.repeat(H, num_rx//num_tx , axis=0)  # (num_rx, num_tx)
 
     rx_signal = H @ signal + noise
 
@@ -319,7 +320,6 @@ if __name__ == "__main__":
         pilot_spacing=2,
         est_method='linear',
         interp_method='linear',
-        equalizer='zf',
         est_time='fft_ml',
         channel_type='awgn',
         display_est_result=False,

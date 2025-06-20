@@ -123,9 +123,12 @@ def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
     """
     bits = np.asarray(bits)
     k = compute_k(cfg, cfg.code_rate)
+    bits = bits.reshape(cfg.num_tx_ant, -1)  # 确保是二维数组
+    if bits.size % k != 0:
+        raise ValueError(f"bits size must be a multiple of {k}")
     if bits.ndim == 1:
         bits = bits[None, :]
-    if bits.shape != (cfg.num_tx_ant, k):
+    if bits.shape != (cfg.num_tx_ant, k//cfg.num_tx_ant):
         raise ValueError(f"bits shape must be ({cfg.num_tx_ant}, {k})")
 
     total_len = cfg.num_symbols * (cfg.n_fft + cfg.cp_len)
@@ -219,12 +222,12 @@ def plot_ofdm_resource_grid(freq_symbols: np.ndarray, cfg: OFDMConfig, title: st
     plt.figure(figsize=(12, 6))
     
     # 创建资源网格图
-    grid = np.zeros((freq_symbols.shape[1], freq_symbols.shape[0]))
+    grid = np.zeros((freq_symbols.shape[-1], freq_symbols.shape[-2]))
     pilot_indices = cfg.get_pilot_indices()
     data_indices = cfg.get_data_indices()
     subcarrier_indices = cfg.get_subcarrier_indices()
     # 标记导频和数据位置
-    for i in range(freq_symbols.shape[0]):
+    for i in range(freq_symbols.shape[1]):
         if cfg.has_pilot(i):
             grid[subcarrier_indices, i] = 1  # 导频
             # grid[data_indices, i] = 0.5  # 数据
@@ -258,15 +261,17 @@ def plot_ofdm_resource_grid(freq_symbols: np.ndarray, cfg: OFDMConfig, title: st
 if __name__ == "__main__":
     # 创建测试配置
     cfg = OFDMConfig(
-        n_fft=4096,
-        n_subcarrier=3276,
+        n_fft=256,
+        n_subcarrier=200,
         cp_len=16,
-        mod_order=4,  # 16QAM
+        mod_order=2,  # 16QAM
         num_symbols=14,  # 14个OFDM符号
         pilot_pattern='comb',
         pilot_spacing=2,  # 频域间隔改为2
         pilot_symbols=[2,11],  # 只在第2和第11个符号上有导频
-        code_rate= 1
+        code_rate= 1,
+        num_rx_ant=2,
+        num_tx_ant=2,
     )
     # 生成随机比特流
     np.random.seed(42)
@@ -281,7 +286,7 @@ if __name__ == "__main__":
     
     # 绘制时域信号
     plt.figure(figsize=(12, 4))
-    plt.plot(np.abs(time_signal))
+    plt.plot(np.sum(np.abs(time_signal), axis=0), color='blue')
     plt.grid(True)
     plt.xlabel('采样点')
     plt.ylabel('幅度')

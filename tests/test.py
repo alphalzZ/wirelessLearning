@@ -67,7 +67,7 @@ class TestOFDMSystem(unittest.TestCase):
         """测试OFDM收发端功能"""
         # 生成随机比特流
         k = compute_k(self.cfg, self.cfg.code_rate)
-        bits = np.random.randint(0, 2, (self.cfg.num_tx_ant, k))
+        bits = np.random.randint(0, 2, k)
         
         # 发送端处理
         tx_signal, freq_symbols = ofdm_tx(bits, self.cfg)
@@ -75,21 +75,21 @@ class TestOFDMSystem(unittest.TestCase):
         # 添加噪声
         if self.cfg.channel_type == 'multipath':
             rx_signal, h_channel = multipath_channel(
-                tx_signal, num_rx=self.cfg.num_rx_ant
+                tx_signal, num_rx=self.cfg.num_rx_ant, num_tx=self.cfg.num_tx_ant
             )
         elif self.cfg.channel_type == 'awgn':
-            rx_signal = awgn_channel(tx_signal, num_rx=self.cfg.num_rx_ant)
+            rx_signal = awgn_channel(tx_signal, num_rx=self.cfg.num_rx_ant, num_tx=self.cfg.num_tx_ant)
         elif self.cfg.channel_type == 'rayleigh':
             rx_signal, h_channel = rayleigh_channel(
-                tx_signal, num_rx=self.cfg.num_rx_ant
+                tx_signal, num_rx=self.cfg.num_rx_ant,num_tx=self.cfg.num_tx_ant
             )
         elif self.cfg.channel_type == 'sionna_fading':
             rx_signal = sionna_fading_channel(
-                tx_signal, num_rx=self.cfg.num_rx_ant
+                tx_signal, num_rx=self.cfg.num_rx_ant,num_tx=self.cfg.num_tx_ant
             )
         elif self.cfg.channel_type == 'sionna_tdl':
             rx_signal = sionna_tdl_channel(
-                tx_signal, num_rx=self.cfg.num_rx_ant
+                tx_signal, num_rx=self.cfg.num_rx_ant, num_tx=self.cfg.num_tx_ant
             )
         else:
             raise ValueError(f"不支持的信道类型: {self.cfg.channel_type}")
@@ -97,7 +97,7 @@ class TestOFDMSystem(unittest.TestCase):
         # 接收端处理
         rx_syms, rx_bits = ofdm_rx(rx_signal, self.cfg)
         # 计算误码率
-        bits_error = np.mean(rx_bits != bits[0])
+        bits_error = np.mean(rx_bits != bits)
         if self.cfg.code_rate < 1.0:
             print(f'ldpc bit error:{bits_error}')
         else:
@@ -143,9 +143,8 @@ class TestOFDMSystem(unittest.TestCase):
 
     def test_multi_antenna_reception(self):
         """测试多天线接收流程"""
-        self.cfg.num_rx_ant = 4
         k = compute_k(self.cfg, self.cfg.code_rate)
-        bits = np.random.randint(0, 2, (self.cfg.num_tx_ant, k))
+        bits = np.random.randint(0, 2,  k)
         tx_signal, _ = ofdm_tx(bits, self.cfg)
         rx_signal = awgn_channel(tx_signal, num_rx=self.cfg.num_rx_ant)
         _, rx_bits = ofdm_rx(rx_signal, self.cfg)
@@ -155,7 +154,7 @@ class TestOFDMSystem(unittest.TestCase):
         """结合LDPC编译码的完整OFDM流程"""
         rate = self.cfg.code_rate
         k = compute_k(self.cfg, rate)
-        info_bits = np.random.randint(0, 2, (self.cfg.num_tx_ant, k))
+        info_bits = np.random.randint(0, 2,  k)
 
         tx_signal, _ = ofdm_tx(info_bits, self.cfg)
         rx_signal = awgn_channel(tx_signal, num_rx=self.cfg.num_rx_ant)
@@ -171,7 +170,7 @@ class TestOFDMSystem(unittest.TestCase):
         # 生成随机比特流
         np.random.seed(42)
         k = compute_k(self.cfg, self.cfg.code_rate)
-        bits = np.random.randint(0, 2, (self.cfg.num_tx_ant, k))
+        bits = np.random.randint(0, 2,  k)
         
         # 生成OFDM符号
         time_signal, freq_symbols = ofdm_tx(bits, self.cfg)

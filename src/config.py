@@ -5,7 +5,7 @@ OFDM系统配置模块
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 import numpy as np
 import yaml
 
@@ -46,7 +46,7 @@ class OFDMConfig:
     # 同步配置
     sync_method: str = 'auto'          # 同步方法：'auto'（自动）或'manual'（手动）
 
-    _pilot_symbols_cache: Optional[dict[(int, int), np.ndarray]] = None  # 按符号缓存导频(ant_idx, symbol_idx) -> np.ndarray
+    _pilot_symbols_cache: Optional[Dict[Tuple[int, int], np.ndarray]] = None  # 按符号缓存导频(ant_idx, symbol_idx) -> np.ndarray
 
     def __post_init__(self):
         """初始化后处理"""
@@ -204,13 +204,15 @@ class OFDMConfig:
             idx_list = self.get_pilot_symbol_indices()
         else:
             idx_list = np.atleast_1d(symbol_idx).astype(int)
-
+        out = []
         for ant_idx in range(self.num_tx_ant):
             for idx in idx_list:
                 key = (ant_idx, int(idx))
                 if key not in self._pilot_symbols_cache:
                     self._pilot_symbols_cache[key] = gen(ant_idx, int(idx))
-        return self._pilot_symbols_cache
+                out.append(self._pilot_symbols_cache[key])
+        # -------- 返回结果 --------
+        return out[0] if len(out) == 1 else np.stack(out, axis=0)
     
     def get_pilot_symbol(self, ant_idx: int = 0) -> np.ndarray:
         """获取指定天线的所有导频符号
@@ -299,7 +301,7 @@ class OFDMConfig:
         Returns:
             总比特数
         """
-        return self.get_num_data_carriers() * self.mod_order * self.num_tx_ant
+        return self.get_num_data_carriers() * self.mod_order 
     
     def get_total_bits(self) -> int:
         """获取整个传输的总比特数
@@ -309,7 +311,7 @@ class OFDMConfig:
         """
         return (
             self.get_total_bits_per_symbol()
-            * len(self.get_data_symbol_indices())
+            * len(self.get_data_symbol_indices()) * self.num_tx_ant
         )
 
 def load_config(config_path: str) -> OFDMConfig:
