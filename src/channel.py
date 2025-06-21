@@ -48,8 +48,8 @@ def awgn_channel(
         np.random.randn(num_rx, N) + 1j * np.random.randn(num_rx, N)
     ) / np.sqrt(2)
 
-    # 恒等信道矩阵，将每根发送天线映射到对应接收天线
-    H = np.eye(num_rx, num_tx, dtype=np.complex128)
+    H = np.eye(num_tx)* np.exp(1j*np.random.randn(num_tx, num_tx))
+    H = np.repeat(H, num_rx//num_tx , axis=0)  # (num_rx, num_tx)
 
     rx_signal = H @ signal + noise
 
