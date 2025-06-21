@@ -835,22 +835,41 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
     if cfg.display_est_result:
         print(f"估计的时延: {est_timing}, 估计的频偏: {est_freq_offset}")
 
-    signal_freq_comp = np.stack(
-        [
-            compensate_frequency_offset(signal[a], est_freq_offset[a], cfg)
+    num_layer = est_freq_offset.shape[1] if est_freq_offset.ndim > 1 else 1
+
+    # 逐层逐天线补偿频偏
+    freq_comp_list = []
+    for l in range(num_layer):
+        comp_ant = [
+            compensate_frequency_offset(
+                signal[a],
+                est_freq_offset[a, l] if num_layer > 1 else est_freq_offset[a],
+                cfg,
+            )
             for a in range(num_ant)
-        ],
+        ]
+        freq_comp_list.append(np.stack(comp_ant, axis=0))
+    signal_freq_comp = np.stack(freq_comp_list, axis=0)
+
+    # CP 移除与FFT
+    rx_symbols = np.stack(
+        [remove_cp_and_fft(signal_freq_comp[l], cfg) for l in range(num_layer)],
         axis=0,
     )
 
-    rx_symbols = remove_cp_and_fft(signal_freq_comp, cfg)
-    signal_timing = np.stack(
-        [
-            compensate_timing_offset(rx_symbols[a], est_timing[a], cfg)
+    # 逐层逐天线补偿时延
+    timing_list = []
+    for l in range(num_layer):
+        comp_ant = [
+            compensate_timing_offset(
+                rx_symbols[l, a],
+                est_timing[a, l] if num_layer > 1 else est_timing[a],
+                cfg,
+            )
             for a in range(num_ant)
-        ],
-        axis=0,
-    )
+        ]
+        timing_list.append(np.stack(comp_ant, axis=0))
+    signal_timing = np.stack(timing_list, axis=0)
     # 3. 信道估计和均衡
     h_est = estimate_channel(signal_timing, cfg, pilot_symbols, pilot_indices)
     noise_var, RxPower = noise_var_estimate(signal_timing, h_est, cfg, pilot_symbols, pilot_indices)
