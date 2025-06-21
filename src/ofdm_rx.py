@@ -303,18 +303,19 @@ def estimate_channel(
     pilot_symbols: np.ndarray | None = None,
     pilot_indices: np.ndarray | None = None,
 ) -> np.ndarray:
-    """信道估计
-    
-    Args:
-        rx_symbols: 接收符号
-        cfg: 系统配置参数
-        pilot_symbols: 导频符号（可选）
-        pilot_indices: 导频位置（可选）
-    
-    Returns:
-        估计的信道响应
-    """
-    if rx_symbols.ndim == 3:
+    """信道估计，支持多层 OCC 导频"""
+
+    # -------- 递归处理多层 / 多天线 --------
+    if rx_symbols.ndim == 4:  # (L, Nr, Ns, Nsc)
+        est_list = []
+        for l in range(rx_symbols.shape[0]):
+            pil_l = None
+            if pilot_symbols is not None and pilot_symbols.ndim == 3:
+                pil_l = pilot_symbols[l]
+            est_list.append(estimate_channel(rx_symbols[l], cfg, pil_l, pilot_indices))
+        return np.stack(est_list, axis=0)
+
+    if rx_symbols.ndim == 3:  # (Nr, Ns, Nsc)
         est = [
             estimate_channel(rs, cfg, pilot_symbols, pilot_indices)
             for rs in rx_symbols
@@ -333,36 +334,42 @@ def estimate_channel(
     for i, sym_idx in enumerate(pilot_symbol_indices):
         rx_pilots[i] = rx_symbols[sym_idx]
     
-    #将rx_pilots和rx_symbols的维度对齐
-    pilot_symbols_pad = np.zeros((len(pilot_symbol_indices), cfg.n_subcarrier), dtype=np.complex64)
-    for i in range(len(pilot_symbol_indices)):
-        pilot_symbols_pad[i, pilot_indices] = pilot_symbols[i]
+    # -------- OCC 解码 --------
+    if pilot_symbols.ndim == 3:
+        num_layer = pilot_symbols.shape[0]
+        h_layers = np.zeros((num_layer, len(pilot_symbol_indices), len(pilot_indices)), dtype=np.complex64)
+        for l in range(num_layer):
+            hp = rx_pilots[:, pilot_indices] * np.conj(pilot_symbols[l])
+            for n in range(0, len(pilot_indices), num_layer):
+                end = min(n + num_layer, len(pilot_indices))
+                h_sum = np.sum(hp[:, n:end], axis=1)
+                h_layers[l, :, n:end] = h_sum[:, None]
+    else:
+        num_layer = 1
+        h_layers = (rx_pilots[:, pilot_indices] * np.conj(pilot_symbols))[None, :, :]
 
-    # 计算每个导频位置的信道响应，使用共轭相乘
-    h_pilot = rx_pilots * np.conj(pilot_symbols_pad)
+    h_pilot_full = np.zeros((num_layer, len(pilot_symbol_indices), cfg.n_subcarrier), dtype=np.complex64)
+    for l in range(num_layer):
+        for idx, sc in enumerate(pilot_indices):
+            h_pilot_full[l, :, sc] = h_layers[l, :, idx]
     
-    #非导频位置的信道响应为其相邻导频位置的信道响应的平均
-    h_est = np.zeros((len(pilot_symbol_indices), cfg.n_subcarrier), dtype=np.complex64)
-    for i in range(cfg.n_subcarrier):
-        if i in pilot_indices:
-            h_est[:, i] = h_pilot[:, i]
+    #非导频位置的信道响应为相邻导频信道的线性插值
+    h_est = np.zeros((num_layer, len(pilot_symbol_indices), cfg.n_subcarrier), dtype=np.complex64)
+    for sc in range(cfg.n_subcarrier):
+        if sc in pilot_indices:
+            h_est[..., sc] = h_pilot_full[..., sc]
         else:
-            # 找到最近的导频位置
-            left_pilots = pilot_indices[pilot_indices < i]
-            right_pilots = pilot_indices[pilot_indices > i]
-            
-            if len(left_pilots) > 0 and len(right_pilots) > 0:
-                # 正常情况：左右都有导频
-                left_pilot = left_pilots[-1]
-                right_pilot = right_pilots[0]
-                alpha = (i - left_pilot) / (right_pilot - left_pilot)
-                h_est[:, i] = (1 - alpha) * h_pilot[:, left_pilot] + alpha * h_pilot[:, right_pilot]
-            elif len(left_pilots) > 0:
-                # 只有左边有导频（最后一个导频之后的位置）
-                h_est[:, i] = h_pilot[:, left_pilots[-1]]
+            left = pilot_indices[pilot_indices < sc]
+            right = pilot_indices[pilot_indices > sc]
+            if len(left) > 0 and len(right) > 0:
+                l = left[-1]
+                r = right[0]
+                alpha = (sc - l) / (r - l)
+                h_est[..., sc] = (1 - alpha) * h_pilot_full[..., l] + alpha * h_pilot_full[..., r]
+            elif len(left) > 0:
+                h_est[..., sc] = h_pilot_full[..., left[-1]]
             else:
-                # 只有右边有导频（第一个导频之前的位置）
-                h_est[:, i] = h_pilot[:, right_pilots[0]]
+                h_est[..., sc] = h_pilot_full[..., right[0]]
     
     # 使用滑动平均计算每个窗口的信道响应，窗口大小为2*cfg.pilot_spacing+1
     if cfg.mod_order == 2:
@@ -372,22 +379,20 @@ def estimate_channel(
     else:
         window_size = cfg.win_size[2]
     h_est_smooth = np.zeros_like(h_est)
-    for i in range(len(pilot_symbol_indices)):
-        for j in range(cfg.n_subcarrier):
-            # 计算当前窗口的起始和结束位置
-            start = max(0, j - cfg.pilot_spacing)
-            end = min(cfg.n_subcarrier, j + cfg.pilot_spacing + window_size)
-            # 计算实际窗口大小
-            actual_window_size = end - start
-            # 使用实际窗口大小进行平均
-            h_est_smooth[i, j] = np.mean(h_est[i, start:end])
+    for l in range(num_layer):
+        for i in range(len(pilot_symbol_indices)):
+            for j in range(cfg.n_subcarrier):
+                start = max(0, j - cfg.pilot_spacing)
+                end = min(cfg.n_subcarrier, j + cfg.pilot_spacing + window_size)
+                h_est_smooth[l, i, j] = np.mean(h_est[l, i, start:end])
     # 对h_est在每个子载波维度进行插值
     symbol_range = np.arange(cfg.num_symbols)
     if cfg.interp_method == 'nearest':
-        # 最近邻插值：一次性计算所有子载波
         diff = np.abs(symbol_range[:, None] - pilot_symbol_indices[None, :])
         nearest_idx = diff.argmin(axis=1)
-        h_est_interp = h_est_smooth[nearest_idx]
+        h_est_interp = np.zeros((num_layer, cfg.num_symbols, cfg.n_subcarrier), dtype=np.complex64)
+        for idx, ni in enumerate(nearest_idx):
+            h_est_interp[:, idx] = h_est_smooth[:, ni]
     else:
         # 线性插值：向量化处理
         left_idx = np.searchsorted(pilot_symbol_indices, symbol_range, side="right") - 1
@@ -400,11 +405,11 @@ def estimate_channel(
         denom = right_pos - left_pos
         denom[denom == 0] = 1
         alpha = ((symbol_range - left_pos) / denom)[:, None]
-
-        h_left = h_est_smooth[left_idx]
-        h_right = h_est_smooth[right_idx]
-
-        h_est_interp = (1 - alpha) * h_left + alpha * h_right
+        h_est_interp = np.zeros((num_layer, cfg.num_symbols, cfg.n_subcarrier), dtype=np.complex64)
+        for idx in range(cfg.num_symbols):
+            h_left = h_est_smooth[:, left_idx[idx]]
+            h_right = h_est_smooth[:, right_idx[idx]]
+            h_est_interp[:, idx] = (1 - alpha[idx]) * h_left + alpha[idx] * h_right
 
     return h_est_interp
 
@@ -871,41 +876,57 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
         timing_list.append(np.stack(comp_ant, axis=0))
     signal_timing = np.stack(timing_list, axis=0)
     # 3. 信道估计和均衡
-    h_est = estimate_channel(signal_timing, cfg, pilot_symbols, pilot_indices)
-    noise_var, RxPower = noise_var_estimate(signal_timing, h_est, cfg, pilot_symbols, pilot_indices)
+    h_layers = []
+    noise_layers = []
+    power_layers = []
+    for l in range(num_layer):
+        h_l = estimate_channel(signal_timing[l], cfg, pilot_symbols[l] if pilot_symbols.ndim == 3 else pilot_symbols, pilot_indices)
+        n_l, p_l = noise_var_estimate(signal_timing[l], h_l, cfg, pilot_symbols[l] if pilot_symbols.ndim == 3 else pilot_symbols, pilot_indices)
+        h_layers.append(h_l)
+        noise_layers.append(n_l)
+        power_layers.append(p_l)
+    h_est = np.stack(h_layers, axis=0)
+    noise_var = np.stack(noise_layers, axis=0)
+    RxPower = np.stack(power_layers, axis=0)
     if cfg.display_est_result:
         sinr = 10 * np.log10(np.mean(RxPower) / np.mean(noise_var))
         print(f"估计的SINR: {sinr :.2f} dB")
-    #信道均衡
-    rx_symbols_equalized = channel_equalization(signal_timing, h_est, noise_var, cfg)
-    if rx_symbols_equalized.ndim == 2:
-        rx_symbols_equalized = rx_symbols_equalized[None, :, :]  # 添加天线维度
-    rx_combined = np.mean(rx_symbols_equalized, axis=0)
+
+    rx_combined_list = []
+    for l in range(num_layer):
+        eq = channel_equalization(signal_timing[l], h_est[l], noise_var[l], cfg)
+        if eq.ndim == 2:
+            eq = eq[None, :, :]
+        rx_combined_list.append(np.mean(eq, axis=0))
+    rx_combined = np.stack(rx_combined_list, axis=0)
     
     # 4. QAM 解调
     data_symbol_indices = cfg.get_data_symbol_indices()
 
-    llr = qam_demodulation(
-        rx_combined[data_symbol_indices],
-        cfg.mod_order,
-        return_llr=True,
-        noise_var=float(np.mean(noise_var / RxPower)),
-    )
+    bits_list = []
+    for l in range(num_layer):
+        llr = qam_demodulation(
+            rx_combined[l, data_symbol_indices],
+            cfg.mod_order,
+            return_llr=True,
+            noise_var=float(np.mean(noise_var[l] / RxPower[l])),
+        )
+        if cfg.code_rate < 1.0:
+            from src.fec import ldpc_decode, get_segment_lengths
+            _, n_segments = get_segment_lengths(cfg, cfg.code_rate)
+            start = 0
+            llr_list = []
+            llr = -1 * llr
+            for n in n_segments:
+                llr_list.append(llr[start:start + n])
+                start += n
+            bits = ldpc_decode(llr_list, cfg, cfg.code_rate)
+        else:
+            bits = (llr < 0).astype(np.int8)
+        bits_list.append(bits)
 
-    if cfg.code_rate < 1.0:
-        from src.fec import ldpc_decode, get_segment_lengths
-        _, n_segments = get_segment_lengths(cfg, cfg.code_rate)
-        start = 0
-        llr_list = []
-        llr = -1*llr
-        for n in n_segments:
-            llr_list.append(llr[start:start + n])
-            start += n
-        bits_rx = ldpc_decode(llr_list, cfg, cfg.code_rate)
-    else:
-        bits_rx = (llr < 0).astype(np.int8)
-
-    return rx_combined, bits_rx
+    bits_rx = np.stack(bits_list, axis=0)
+    return rx_combined.squeeze(0) if rx_combined.shape[0] == 1 else rx_combined, bits_rx.squeeze(0) if bits_rx.shape[0] == 1 else bits_rx
 def ofdm_rx_matlab(rx_symbols_real, rx_symbols_imag, pilot_symbol_indices, pilot_symbols_real, pilot_symbols_imag, pilot_indices,nfft,mod_order,plot=False):
     # simulation with matlab
     rx_symbols = rx_symbols_real+1j*rx_symbols_imag
