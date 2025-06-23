@@ -88,7 +88,7 @@ class TestOFDMSystem(unittest.TestCase):
                 tx_signal, num_rx=self.cfg.num_rx_ant,num_tx=self.cfg.num_tx_ant
             )
         elif self.cfg.channel_type == 'sionna_tdl':
-            rx_signal = sionna_tdl_channel(
+            rx_signal, h_channel= sionna_tdl_channel(
                 tx_signal, num_rx=self.cfg.num_rx_ant, num_tx=self.cfg.num_tx_ant
             )
         else:
@@ -97,7 +97,7 @@ class TestOFDMSystem(unittest.TestCase):
         # 接收端处理
         rx_syms, rx_bits = ofdm_rx(rx_signal, self.cfg)
         # 计算误码率
-        bits_error = np.mean(rx_bits != bits)
+        bits_error = np.mean(rx_bits.reshape(-1) != bits)
         if self.cfg.code_rate < 1.0:
             print(f'ldpc bit error:{bits_error}')
         else:
@@ -105,26 +105,27 @@ class TestOFDMSystem(unittest.TestCase):
         # 绘制星座图
         plt.figure(figsize=(10, 5))
         data_indices = self.cfg.get_data_symbol_indices()
-        subcarrier_indices = self.cfg.get_subcarrier_indices()
         print(f'data loc is{data_indices}')
         # 绘制发送符号的星座图
-        freq_symbols_plot = freq_symbols[0][np.ix_(data_indices, subcarrier_indices)]
+        rx_syms_0 = rx_syms[0][data_indices]
         plt.subplot(121)
-        plt.scatter(freq_symbols_plot.real, freq_symbols_plot.imag, c='b', marker='o', label='发送符号')
+        plt.scatter(rx_syms_0.real, rx_syms_0.imag, c='b', marker='o', label='layer0')
         plt.grid(True)
-        plt.title('发送符号星座图')
+        plt.title('第一个layer星座图')
         plt.xlabel('实部')
         plt.ylabel('虚部')
         plt.legend()
         
         # 绘制接收符号的星座图
-        plt.subplot(122)
-        plt.scatter(rx_syms[data_indices].real, rx_syms[data_indices].imag, c='r', marker='.', label='接收符号')
-        plt.grid(True)
-        plt.title('接收符号星座图')
-        plt.xlabel('实部')
-        plt.ylabel('虚部')
-        plt.legend()
+        rx_syms_1 = rx_syms[1][data_indices] if self.cfg.num_tx_ant > 1 else rx_syms_0
+        if self.cfg.num_tx_ant > 1:
+            plt.subplot(122)
+            plt.scatter(rx_syms_1.real, rx_syms_1.imag, c='r', marker='.', label='layer1')
+            plt.grid(True)
+            plt.title('第二个layer星座图')
+            plt.xlabel('实部')
+            plt.ylabel('虚部')
+            plt.legend()
 
         plt.tight_layout()
         plt.show()
