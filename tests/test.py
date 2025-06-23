@@ -9,6 +9,7 @@ import numpy as np
 import sys
 from pathlib import Path
 import matplotlib.pyplot as plt
+import yaml
 
 # 添加项目根目录到Python路径
 project_root = str(Path(__file__).parent.parent)
@@ -57,10 +58,10 @@ class TestOFDMSystem(unittest.TestCase):
         """测试导频插入功能"""
         # 生成测试数据
         # 测试导频插入
-        ofdm_symbol = insert_pilots(self.cfg)
-        
+        ofdm_symbol = insert_pilots(self.cfg, 0)
+
         # 验证输出
-        self.assertEqual(len(ofdm_symbol), self.cfg.n_fft)
+        self.assertEqual(ofdm_symbol.shape, (self.cfg.num_tx_ant, self.cfg.n_fft))
         
     def test_ofdm_tx_rx(self):
         """测试OFDM收发端功能"""
@@ -74,21 +75,21 @@ class TestOFDMSystem(unittest.TestCase):
         # 添加噪声
         if self.cfg.channel_type == 'multipath':
             rx_signal, h_channel = multipath_channel(
-                tx_signal, num_rx=self.cfg.num_rx_ant
+                tx_signal, num_rx=self.cfg.num_rx_ant, num_tx=self.cfg.num_tx_ant
             )
         elif self.cfg.channel_type == 'awgn':
-            rx_signal = awgn_channel(tx_signal, num_rx=self.cfg.num_rx_ant)
+            rx_signal = awgn_channel(tx_signal, num_rx=self.cfg.num_rx_ant, num_tx=self.cfg.num_tx_ant)
         elif self.cfg.channel_type == 'rayleigh':
             rx_signal, h_channel = rayleigh_channel(
-                tx_signal, num_rx=self.cfg.num_rx_ant
+                tx_signal, num_rx=self.cfg.num_rx_ant,num_tx=self.cfg.num_tx_ant
             )
         elif self.cfg.channel_type == 'sionna_fading':
             rx_signal = sionna_fading_channel(
-                tx_signal, num_rx=self.cfg.num_rx_ant
+                tx_signal, num_rx=self.cfg.num_rx_ant,num_tx=self.cfg.num_tx_ant
             )
         elif self.cfg.channel_type == 'sionna_tdl':
-            rx_signal = sionna_tdl_channel(
-                tx_signal, num_rx=self.cfg.num_rx_ant
+            rx_signal, h_channel= sionna_tdl_channel(
+                tx_signal, num_rx=self.cfg.num_rx_ant, num_tx=self.cfg.num_tx_ant
             )
         else:
             raise ValueError(f"不支持的信道类型: {self.cfg.channel_type}")
@@ -96,7 +97,7 @@ class TestOFDMSystem(unittest.TestCase):
         # 接收端处理
         rx_syms, rx_bits = ofdm_rx(rx_signal, self.cfg)
         # 计算误码率
-        bits_error = np.mean(rx_bits != bits)
+        bits_error = np.mean(rx_bits.reshape(-1) != bits)
         if self.cfg.code_rate < 1.0:
             print(f'ldpc bit error:{bits_error}')
         else:
@@ -104,26 +105,27 @@ class TestOFDMSystem(unittest.TestCase):
         # 绘制星座图
         plt.figure(figsize=(10, 5))
         data_indices = self.cfg.get_data_symbol_indices()
-        subcarrier_indices = self.cfg.get_subcarrier_indices()
         print(f'data loc is{data_indices}')
         # 绘制发送符号的星座图
-        freq_symbols_plot = freq_symbols[np.ix_(data_indices,subcarrier_indices)]
+        rx_syms_0 = rx_syms[0][data_indices]
         plt.subplot(121)
-        plt.scatter(freq_symbols_plot.real, freq_symbols_plot.imag, c='b', marker='o', label='发送符号')
+        plt.scatter(rx_syms_0.real, rx_syms_0.imag, c='b', marker='o', label='layer0')
         plt.grid(True)
-        plt.title('发送符号星座图')
+        plt.title('第一个layer星座图')
         plt.xlabel('实部')
         plt.ylabel('虚部')
         plt.legend()
         
         # 绘制接收符号的星座图
-        plt.subplot(122)
-        plt.scatter(rx_syms[data_indices].real, rx_syms[data_indices].imag, c='r', marker='.', label='接收符号')
-        plt.grid(True)
-        plt.title('接收符号星座图')
-        plt.xlabel('实部')
-        plt.ylabel('虚部')
-        plt.legend()
+        rx_syms_1 = rx_syms[1][data_indices] if self.cfg.num_tx_ant > 1 else rx_syms_0
+        if self.cfg.num_tx_ant > 1:
+            plt.subplot(122)
+            plt.scatter(rx_syms_1.real, rx_syms_1.imag, c='r', marker='.', label='layer1')
+            plt.grid(True)
+            plt.title('第二个layer星座图')
+            plt.xlabel('实部')
+            plt.ylabel('虚部')
+            plt.legend()
 
         plt.tight_layout()
         plt.show()
@@ -142,27 +144,26 @@ class TestOFDMSystem(unittest.TestCase):
 
     def test_multi_antenna_reception(self):
         """测试多天线接收流程"""
-        self.cfg.num_rx_ant = 4
         k = compute_k(self.cfg, self.cfg.code_rate)
-        bits = np.random.randint(0, 2, k)
+        bits = np.random.randint(0, 2,  k)
         tx_signal, _ = ofdm_tx(bits, self.cfg)
         rx_signal = awgn_channel(tx_signal, num_rx=self.cfg.num_rx_ant)
         _, rx_bits = ofdm_rx(rx_signal, self.cfg)
-        self.assertEqual(len(rx_bits), len(bits))
+        self.assertEqual(len(rx_bits), bits.shape[1])
 
     def test_ofdm_tx_rx_ldpc(self):
         """结合LDPC编译码的完整OFDM流程"""
         rate = self.cfg.code_rate
         k = compute_k(self.cfg, rate)
-        info_bits = np.random.randint(0, 2, k)
+        info_bits = np.random.randint(0, 2,  k)
 
         tx_signal, _ = ofdm_tx(info_bits, self.cfg)
         rx_signal = awgn_channel(tx_signal, num_rx=self.cfg.num_rx_ant)
         _, dec_bits = ofdm_rx(rx_signal, self.cfg)
 
-        ber = np.mean(dec_bits != info_bits)
+        ber = np.mean(dec_bits != info_bits[0])
         print('LDPC BER:', ber)
-        self.assertEqual(len(dec_bits), len(info_bits))
+        self.assertEqual(len(dec_bits), info_bits.shape[1])
 
 
     def test_ofdm_rx_with_channel_estimation(self):
@@ -170,7 +171,7 @@ class TestOFDMSystem(unittest.TestCase):
         # 生成随机比特流
         np.random.seed(42)
         k = compute_k(self.cfg, self.cfg.code_rate)
-        bits = np.random.randint(0, 2, k)
+        bits = np.random.randint(0, 2,  k)
         
         # 生成OFDM符号
         time_signal, freq_symbols = ofdm_tx(bits, self.cfg)
@@ -197,11 +198,28 @@ class TestOFDMSystem(unittest.TestCase):
         plt.subplot(132)
         plt.scatter(rx_symbols_equalized.real, rx_symbols_equalized.imag,label='均衡后')
         plt.subplot(133)
-        plt.scatter(freq_symbols.real, freq_symbols.imag,label='实际')
+        plt.scatter(freq_symbols[0].real, freq_symbols[0].imag,label='实际')
         plt.legend()
         plt.show()
         plt.close()
         print(f"信道估计结果: {h_est}")
+
+
+class TestNumTxAnt(unittest.TestCase):
+    def test_single_stream(self):
+        cfg = load_config('config.yaml')
+        self.assertEqual(cfg.num_tx_ant, 1)
+        expected = cfg.get_num_data_carriers() * cfg.mod_order * cfg.num_tx_ant
+        self.assertEqual(cfg.get_total_bits_per_symbol(), expected)
+
+    def test_two_streams(self):
+        with open('config.yaml', 'r', encoding='utf-8') as f:
+            cfg_dict = yaml.safe_load(f)
+        cfg_dict['num_tx_ant'] = 2
+        cfg = OFDMConfig(**cfg_dict)
+        expected = cfg.get_num_data_carriers() * cfg.mod_order * cfg.num_tx_ant
+        self.assertEqual(cfg.num_tx_ant, 2)
+        self.assertEqual(cfg.get_total_bits_per_symbol(), expected)
 
 
 if __name__ == '__main__':
@@ -213,3 +231,4 @@ if __name__ == '__main__':
     # 运行测试
     runner = unittest.TextTestRunner()
     runner.run(suite)
+

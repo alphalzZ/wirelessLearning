@@ -5,7 +5,7 @@ OFDM系统配置模块
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 import numpy as np
 import yaml
 
@@ -25,6 +25,7 @@ class OFDMConfig:
     n_subcarrier: int = 3276           # 子载波数量
     mod_order: int = 4                 # 调制阶数（2:QPSK, 4:16QAM, 6:64QAM）
     num_symbols: int = 14             # OFDM符号数量
+    num_tx_ant: int = 1               # 发送天线数量
     num_rx_ant: int = 1               # 接收天线数量
     code_rate: float = 0.5             # 信道编码码率 (0<rate<=1)
     
@@ -45,7 +46,8 @@ class OFDMConfig:
     # 同步配置
     sync_method: str = 'auto'          # 同步方法：'auto'（自动）或'manual'（手动）
 
-    _pilot_symbols_cache: Optional[dict[int, np.ndarray]] = None  # 按符号缓存导频
+    _pilot_symbols_cache: Optional[Dict[Tuple[int, int], np.ndarray]] = None  # 按符号缓存导频(ant_idx, symbol_idx) -> np.ndarray
+
     def __post_init__(self):
         """初始化后处理"""
         # 验证基本参数
@@ -59,6 +61,8 @@ class OFDMConfig:
             raise ValueError("调制阶数必须是2、4或6")
         if self.num_symbols <= 0:
             raise ValueError("OFDM符号数量必须大于0")
+        if self.num_tx_ant <= 0:
+            raise ValueError("发送天线数量必须大于0")
         if self.num_rx_ant <= 0:
             raise ValueError("接收天线数量必须大于0")
         if not (0 < self.code_rate <= 1):
@@ -153,37 +157,90 @@ class OFDMConfig:
                 indices.extend(range(start, start + block_size // 4))
             return np.array(indices)
     
-    def get_pilot_symbols(self, symbol_idx: int | np.ndarray | None = None) -> np.ndarray:
-        """获取指定 OFDM 符号的导频序列
+    def get_pilot_symbols(
+            self,
+            symbol_idx: int | np.ndarray | None = None,
+    ) -> np.ndarray:
+        """
+        获取指定 OFDM 符号、指定天线的导频序列。
 
-        若 ``symbol_idx`` 为 ``None``，返回所有导频符号对应的序列矩阵。
-        ``symbol_idx`` 可以是单个整数或整数数组。
+        参数
+        ----
+        symbol_idx : int | ndarray | None
+            要获取导频的 OFDM 符号索引；None 表示返回所有导频符号。
+        ant_idx : int
+            发射天线索引（0 或 1）。缺省为 0，与旧版行为一致。
+
+        返回
+        ----
+        ndarray
+            - 当 `symbol_idx` 为标量 → shape (N_re,)               # 单符号
+            - 当 `symbol_idx` 为数组或 None → shape (N_sym, N_re)  # 多符号
+            其中 N_re 为导频 RE 数。
         """
         if self._pilot_symbols_cache is None:
-            self._pilot_symbols_cache = {}
+            self._pilot_symbols_cache = {}   # {(ant_idx, sym_idx): ndarray}
 
-        def gen(idx: int) -> np.ndarray:
-            rng = np.random.default_rng(idx)
-            pilot_indices = self.get_pilot_indices()
-            bits = rng.integers(0, 2, size=len(pilot_indices) * 2, dtype=np.int8)
-            syms = self._qpsk_modulate(bits) * np.sqrt(self.pilot_power)
-            return syms
+        _occ_table = {
+            0: lambda n: np.ones(n, dtype=np.complex64),                     # [+1, +1, ...]
+            1: lambda n: np.where(np.arange(n) % 2 == 0, 1, -1).astype(np.complex64)  # [+1, -1, +1, -1, ...]
+        }
+        def gen(ant_idx:int, sym: int) -> np.ndarray:
+            """生成某一符号、某一天线的导频序列（含 OCC）"""
+            pilot_idx = self.get_pilot_indices()          # 同一符号内导频 RE 索引
+            n_re = len(pilot_idx)
 
+            # ▶ 基底 QPSK 导频：与旧实现保持一致
+            rng = np.random.default_rng(sym)
+            bits = rng.integers(0, 2, size=n_re * 2, dtype=np.int8)
+            base = self._qpsk_modulate(bits) * np.sqrt(self.pilot_power)
+
+            # ▶ 乘以 OCC（正交覆盖码）得到不同天线的导频
+            occ = _occ_table[ant_idx](n_re)
+            return base * occ
+
+        # -------- 批量取 / 写缓存 --------
         if symbol_idx is None:
             idx_list = self.get_pilot_symbol_indices()
         else:
             idx_list = np.atleast_1d(symbol_idx).astype(int)
-
         out = []
-        for idx in idx_list:
-            if idx not in self._pilot_symbols_cache:
-                self._pilot_symbols_cache[idx] = gen(int(idx))
-            out.append(self._pilot_symbols_cache[idx])
-
-        if np.isscalar(symbol_idx):
-            return out[0]
-        else:
-            return np.stack(out, axis=0)
+        for ant_idx in range(self.num_tx_ant):
+            for idx in idx_list:
+                key = (ant_idx, int(idx))
+                if key not in self._pilot_symbols_cache:
+                    self._pilot_symbols_cache[key] = gen(ant_idx, int(idx))
+                out.append(self._pilot_symbols_cache[key])
+        # -------- 返回结果 --------
+        return out[0] if len(out) == 1 else np.stack(out, axis=0)
+    
+    def get_pilot_symbol(self, ant_idx: int = 0) -> np.ndarray:
+        """获取指定天线的所有导频符号
+        
+        Args:
+            ant_idx: 发射天线索引（0 至 num_tx_ant-1）
+            
+        Returns:
+            np.ndarray: 所有导频符号，shape为(N_sym, N_re)
+            其中N_sym为导频符号数量，N_re为每个符号中导频RE的数量
+        """
+        if ant_idx < 0 or ant_idx >= self.num_tx_ant:
+            raise ValueError(f"天线索引必须在0到{self.num_tx_ant-1}之间")
+            
+        # 确保缓存已初始化
+        if self._pilot_symbols_cache is None:
+            self.get_pilot_symbols()
+            
+        # 获取所有导频符号索引
+        pilot_sym_indices = self.get_pilot_symbol_indices()
+        
+        # 从缓存中提取指定天线的所有导频
+        pilots = []
+        for sym_idx in pilot_sym_indices:
+            key = (ant_idx, int(sym_idx))
+            pilots.append(self._pilot_symbols_cache[key])
+            
+        return np.stack(pilots, axis=0)
     
     def _qpsk_modulate(self, bits: np.ndarray) -> np.ndarray:
         """QPSK调制
@@ -244,7 +301,7 @@ class OFDMConfig:
         Returns:
             总比特数
         """
-        return self.get_num_data_carriers() * self.mod_order
+        return self.get_num_data_carriers() * self.mod_order 
     
     def get_total_bits(self) -> int:
         """获取整个传输的总比特数
@@ -252,14 +309,23 @@ class OFDMConfig:
         Returns:
             总比特数
         """
-        return self.get_total_bits_per_symbol()*len(self.get_data_symbol_indices())
+        return (
+            self.get_total_bits_per_symbol()
+            * len(self.get_data_symbol_indices()) * self.num_tx_ant
+        )
 
 def load_config(config_path: str) -> OFDMConfig:
     """从YAML文件加载配置"""
     with open(config_path, 'r', encoding='utf-8') as f:
         config_dict = yaml.safe_load(f)
-    return OFDMConfig(**config_dict) 
+    if 'num_tx_ant' not in config_dict:
+        config_dict['num_tx_ant'] = 1
+    return OFDMConfig(**config_dict)
 
 if __name__ == '__main__':
-    cfg = load_config(r'.\config.yaml')
-    print(cfg.num_symbols)
+    cfg = load_config('./config.yaml')
+    pilots_ant0 = cfg.get_pilot_symbol(ant_idx=0) 
+    print("Ant0 Pilots:", pilots_ant0)
+    pilots_ant1 = cfg.get_pilot_symbol(ant_idx=1)
+    print("Ant1 Pilots:", pilots_ant1.shape)  
+    print(np.mean(pilots_ant0+pilots_ant1))  # 打印两个天线导频的平均值
