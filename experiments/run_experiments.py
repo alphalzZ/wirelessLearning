@@ -37,7 +37,7 @@ def run_single_experiment(cfg: OFDMConfig) -> float:
     """
     # 总bit
     k = compute_k(cfg, cfg.code_rate)
-    bits_tx = np.random.randint(0, 2, (cfg.num_tx_ant, k))
+    bits_tx = np.random.randint(0, 2,  k)
     
     # 发送端处理
     tx_signal, _ = ofdm_tx(bits_tx, cfg)
@@ -53,12 +53,13 @@ def run_single_experiment(cfg: OFDMConfig) -> float:
         rx_signal = sionna_fading_channel(tx_signal, num_rx=cfg.num_rx_ant)
     elif cfg.channel_type == "sionna_tdl":
         rx_signal = sionna_tdl_channel(tx_signal, num_rx=cfg.num_rx_ant)
+
     rx_signal = add_timing_offset_and_freq_offset(rx_signal, cfg)
     # 接收端处理
     _, bits_rx = ofdm_rx(rx_signal, cfg)
     
     # 计算性能指标
-    ber = calculate_ber(bits_tx[0], bits_rx)
+    ber = calculate_ber(bits_tx, bits_rx.flatten())
 
     return ber
 
@@ -66,9 +67,9 @@ def main():
     # 加载配置
     config_path = Path(__file__).parent.parent / "config.yaml"
     cfg = load_config(config_path)
-    snr_db_list = np.arange(10, 30, 3) 
+    snr_db_list = np.arange(-3, 21, 3) 
     num_trials = 100  # 每个SNR点的仿真次数
-    eval_methods = [[0,0,0],[1,1,1],[2,2,2],[4,4,4],[8,8,8]]  # 评估方法列表
+    eval_methods = ['zf','mrc']  # 评估方法列表
     
     # 创建结果目录
     results_dir = Path(__file__).parent.parent / "results"
@@ -79,7 +80,7 @@ def main():
     
     # 为每种方法运行仿真
     for i,eval_method in enumerate(eval_methods):
-        cfg.win_size = eval_method
+        cfg.equ_method = eval_method
         # 运行不同SNR下的实验
         results = []
         for snr_db in snr_db_list:
@@ -110,7 +111,7 @@ def main():
     for eval_method, results in all_results.items():
         snr_db_list_act = [result[0] for result in results]
         ber = [result[1] for result in results]
-        plt.semilogy(snr_db_list_act, ber, 'o-', label=f'eval_method: {eval_method}')
+        plt.semilogy(snr_db_list_act, ber, 'o-', label=f'eval_method: {eval_methods[eval_method]}')
     
     plt.grid(True)
     plt.xlabel('SNR (dB)')
@@ -119,7 +120,7 @@ def main():
     plt.legend()
     
     # 保存图片
-    plt.savefig(results_dir / f"ber_vs_snr__chan_type{cfg.channel_type}_mod{cfg.mod_order}_numRx{cfg.num_rx_ant}_评估方法{eval_methods}.png")
+    plt.savefig(results_dir / f"ber_vs_snr__chan_type{cfg.channel_type}_mod{cfg.mod_order}_numTx{cfg.num_tx_ant}_numRx{cfg.num_rx_ant}_评估方法{eval_methods}.png")
     plt.show()
     plt.close()
 
