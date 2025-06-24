@@ -1015,8 +1015,10 @@ def ofdm_rx_matlab(rx_symbols_real, rx_symbols_imag, pilot_symbol_indices, pilot
     # simulation with matlab
     rx_symbols = rx_symbols_real+1j*rx_symbols_imag
     pilot_symbols = pilot_symbols_real+1j*pilot_symbols_imag
+    num_tx_ant = pilot_symbols.shape[0]
     pilot_indices = pilot_indices.astype(np.int32)
     dummyCfg = OFDMConfig()
+    dummyCfg.num_tx_ant = num_tx_ant
     dummyCfg.pilot_symbols = pilot_symbol_indices.astype(np.int32)
     dummyCfg.n_fft = nfft
     dummyCfg.pilot_spacing = pilot_indices[1] - pilot_indices[0]
@@ -1025,18 +1027,35 @@ def ofdm_rx_matlab(rx_symbols_real, rx_symbols_imag, pilot_symbol_indices, pilot
     dummyCfg.interp_method = 'linear'
     dummyCfg.mod_order = np.int8(mod_order)
     dummyCfg.num_symbols = rx_symbols.shape[1]
-    dummyCfg.equ_method = 'irc'
+    dummyCfg.equ_method = 'mmse'
+    dummyCfg.win_size = [8,2,2]
+    num_layer = dummyCfg.num_tx_ant
+    num_ant = dummyCfg.num_rx_ant
+    print(f'eq method:{dummyCfg.equ_method}')
+
     est_timing = []
     est_freq_offset = []
-    if pilot_symbols.ndim == 2:
-        for a in range(dummyCfg.num_rx_ant):
-            est_timing.append(
-                estimate_timing_offset_fft_ml(rx_symbols[a], pilot_symbols, pilot_indices, dummyCfg)
-            )
+    est_timing = []
+    est_freq_offset = []
+    for a in range(num_ant):
+        est_timing.append(
+            estimate_timing_offset(rx_symbols[a], pilot_symbols, pilot_indices, dummyCfg)
+        )
+        est_freq_offset.append(
+            estimate_frequency_offset(rx_symbols[a], pilot_symbols, pilot_indices, dummyCfg)
+        )
+    if dummyCfg.num_tx_ant == 1:
+        est_time = np.array(est_timing)[:,None]
+        est_freq = np.array(est_freq_offset)[:,None]
     else:
-        est_timing = estimate_timing_offset_fft_ml(rx_symbols[0], pilot_symbols, pilot_indices, dummyCfg)
-        est_timing = [est_timing ] * dummyCfg.num_rx_ant
-    print(f'估计的时延：{est_timing}')
+        est_time = np.array(est_timing)
+        est_freq = np.array(est_freq_offset)
+    print(f'init est_time:{est_time}')
+    est_timing = np.mean(est_time,axis=1)
+    est_freq_offset = np.mean(est_freq, axis=1)
+    if dummyCfg.display_est_result:
+        print(f"估计的时延: {est_timing}, 估计的频偏: {est_freq_offset}")
+
     rx_symbols = np.stack(
         [
             compensate_timing_offset(rx_symbols[a], est_timing[a], dummyCfg)
@@ -1044,12 +1063,7 @@ def ofdm_rx_matlab(rx_symbols_real, rx_symbols_imag, pilot_symbol_indices, pilot
         ],
         axis=0
     )
-    # est_freq_offset = estimate_frequency_offset(rx_symbols[0], pilot_symbols, pilot_indices, dummyCfg)
-    for a in range(dummyCfg.num_rx_ant):
-        est_freq_offset.append(
-            estimate_frequency_offset(rx_symbols[a], pilot_symbols, pilot_indices, dummyCfg)
-        )
-    print(f'估计的频偏：{est_freq_offset}')   
+
     rx_symbols_freq_compensation = np.stack(
         [
             compensate_frequency_offset(rx_symbols[a], est_freq_offset[a], dummyCfg)
@@ -1059,27 +1073,71 @@ def ofdm_rx_matlab(rx_symbols_real, rx_symbols_imag, pilot_symbol_indices, pilot
     )
     #channel est
     # 3. 信道估计和均衡
-    h_est = estimate_channel(rx_symbols_freq_compensation, dummyCfg, pilot_symbols, pilot_indices)
-    # print('complet h est')
-    noise_var, RxPower = noise_var_estimate(rx_symbols_freq_compensation, h_est, dummyCfg, pilot_symbols, pilot_indices)
+    h_est_layer = []
+    for l in range(num_layer):#多layer下倾向联合信道估计
+        h_est_ant = []
+        for a in range(num_ant):
+            if dummyCfg.display_est_result:
+                print(f"layer {l + 1} 天线 {a + 1} 的信道估计")
+            h_est_tmp = estimate_channel(rx_symbols_freq_compensation[a], dummyCfg, pilot_symbols[l], pilot_indices)
+            h_est_ant.append(h_est_tmp)
+        h_est = np.stack(h_est_ant, axis=0)
+        h_est_layer.append(h_est)
+    h_est = np.stack(h_est_layer, axis=0) # (num_layer, num_ant, num_symbols, n_subcarrier)
+    print(f'h-est shape:{h_est.shape}')
+    print('complet h est!!')
+    print('start noise est ...')
+    noise_ant = []
+    power_ant = []
+    for ant in range(num_ant):
+        n_l, p_l = noise_var_estimate(rx_symbols_freq_compensation[ant], h_est[:,ant,...], dummyCfg, pilot_symbols, pilot_indices)
+        if dummyCfg.display_est_result:
+            sinr = 10 * np.log10(np.mean(p_l) / np.mean(n_l))
+            print(f"天线 {ant+1} 估计的SINR: {sinr :.2f} dB")
+        noise_ant.append(n_l)
+        power_ant.append(p_l)
+    noise_var = np.stack(noise_ant, axis=0)
+    RxPower = np.stack(power_ant, axis=0)
     sinr = 10 * np.log10((np.mean(RxPower)) / np.mean(noise_var))
     print(f"估计的SINR: {sinr :.2f} dB")
     #信道均衡
-    noise_cov = noise_covariance_estimate(rx_symbols_freq_compensation, h_est, dummyCfg, pilot_symbols, pilot_indices)
-    rx_symbols_equalized = channel_equalization(rx_symbols_freq_compensation, h_est, noise_var,
-                                                 dummyCfg.equ_method,noise_cov)
-    # print('complet eq')
-    rx_combined = rx_symbols_equalized * 1.4125
+
+    noise_cov = [[] for _ in range(num_layer)]
+    if dummyCfg.equ_method == 'irc':
+        noise_cov_list = []
+        for l in range(num_layer):
+            noise_cov_layer = noise_covariance_estimate(rx_symbols_freq_compensation, h_est[l], dummyCfg, pilot_symbols[l], pilot_indices)
+            noise_cov_list.append(noise_cov_layer)
+        noise_cov = np.stack(noise_cov_list, axis=0)
+    
+    rx_combined_list = []
+    if dummyCfg.equ_method == 'irc' or dummyCfg.equ_method == 'mrc':
+        for l in range(num_layer):
+            eq = channel_equalization(rx_symbols_freq_compensation, h_est[l], noise_var[l], dummyCfg, noise_cov[l])
+            if eq.ndim == 2:
+                eq = eq[None, :, :]
+            rx_combined_list.append(np.mean(eq, axis=0))
+        rx_combined = np.stack(rx_combined_list, axis=0)
+    else:
+        eq = channel_equalization(rx_symbols_freq_compensation, h_est, noise_var, dummyCfg)
+        rx_combined = eq
+    print(f'rx-combined shape :{rx_combined.shape}')
+    print('complet eq')
+    rx_combined = rx_combined * 1.4125
     np.save('./data/rx_combined.npy',rx_combined)
     # 4. QAM 解调
     data_symbol_indices = np.setdiff1d(np.linspace(0,dummyCfg.num_symbols-1,dummyCfg.num_symbols).astype(np.int32),dummyCfg.pilot_symbols)
     
-    llr = qam_demodulation(
-        rx_combined[data_symbol_indices],
-        dummyCfg.mod_order,
-        return_llr=True,
-        noise_var=float(np.mean(noise_var / RxPower)),
-    ) 
+    llr_list = []
+    for l in range(num_layer):
+        llr_layer = qam_demodulation(
+            rx_combined[l, data_symbol_indices],
+            dummyCfg.mod_order,
+            return_llr=True,
+            noise_var=float(np.mean(noise_var[l] / RxPower[l])),
+        )
+        llr_list.append(llr_layer)
+    llr = np.stack(llr_list,axis=0)
     if plot:  
         plt.figure()
         plt.scatter(rx_combined[data_symbol_indices].real, rx_combined[data_symbol_indices].imag, c='r', marker='.', label='接收符号')
@@ -1090,19 +1148,22 @@ def ofdm_rx_matlab(rx_symbols_real, rx_symbols_imag, pilot_symbol_indices, pilot
         plt.legend()
         plt.tight_layout()
         plt.show()
-        
+    return llr
+
 def debug(data_path):
+    num_tx = 2
     data_symbol_indices = [0,1,3,4,5,6,7,8,9,10,12,13]
-    rx_combined = np.load(data_path + '\rx_combined.npy')
-    plt.figure()
-    plt.scatter(rx_combined[data_symbol_indices].real, rx_combined[data_symbol_indices].imag, c='r', marker='.', label='接收符号')
-    plt.grid(True)
-    plt.title('接收符号星座图')
-    plt.xlabel('实部')
-    plt.ylabel('虚部')
-    plt.legend()
-    plt.tight_layout()
-    plt.show()   
+    rx_combined = np.load(data_path + r'\rx_combined.npy')
+    for l in range(num_tx):
+        plt.figure()
+        plt.scatter(rx_combined[l][data_symbol_indices].real, rx_combined[l][data_symbol_indices].imag, c='r', marker='.', label=f'layer{l+1}接收符号')
+        plt.grid(True)
+        plt.title('接收符号星座图')
+        plt.xlabel('实部')
+        plt.ylabel('虚部')
+        plt.legend()
+        plt.tight_layout()
+        plt.show()   
     
 if __name__ == "__main__":
     # 创建测试配置
