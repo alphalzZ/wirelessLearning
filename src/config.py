@@ -27,7 +27,7 @@ class OFDMConfig:
     num_symbols: int = 14             # OFDM符号数量
     num_tx_ant: int = 1               # 发送天线数量
     num_rx_ant: int = 1               # 接收天线数量
-    code_rate: float = 0.5             # 信道编码码率 (0<rate<=1)
+    code_rate: float = 1           # 信道编码码率 (0<rate<=1)
     
     # 导频配置
     pilot_pattern: str = 'comb'        # 导频图案类型：'comb'（梳状）或'block'（块状）
@@ -53,7 +53,7 @@ class OFDMConfig:
         # 验证基本参数
         if self.n_fft <= 0 or not self._is_power_of_2(self.n_fft):
             raise ValueError("FFT大小必须是2的幂")
-        if self.n_fft < self.n_subcarrier+2*self.cp_len:
+        if self.n_fft < self.n_subcarrier+self.cp_len:
             raise ValueError("FFT大小必须大于子载波数量+2*循环前缀长度")
         if self.cp_len <= 0:
             raise ValueError("循环前缀长度必须大于0")

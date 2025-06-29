@@ -1,0 +1,483 @@
+from tensorflow.keras.optimizers.schedules import LearningRateSchedule
+from tensorflow.keras.layers import Layer, Conv2D, Conv2DTranspose, LayerNormalization, SeparableConv2D,GroupNormalization
+from tensorflow.keras import Model
+from tensorflow.nn import relu
+from tensorflow.keras import activations, initializers, regularizers, constraints
+import tensorflow as tf
+import os
+import pickle
+import numpy as np
+from scipy.io import loadmat
+import re
+import datetime
+import tf2onnx
+import onnx
+print(tf.__version__)
+from tensorflow.python.keras.utils import conv_utils
+from costumLayers import SeparableConv2DTransposeONNX, residualBlock, NNrecevier,CGNNRecevier
+
+class ThreePhaseLR(LearningRateSchedule):
+    def __init__(self, target_lr=0.001, total_steps=30000, warmup_steps=800, decay_start=9000):
+        super().__init__()
+        self.total_steps = tf.cast(total_steps, tf.float32)
+        self.warmup_steps = tf.cast(warmup_steps, tf.float32)
+        self.decay_start = tf.cast(decay_start, tf.float32)
+        self.max_lr = target_lr  # 基础学习率
+
+    def __call__(self, step):
+        step = tf.cast(step, tf.float32)
+
+        # 阶段1：线性预热 (0 → max_lr)
+        warmup_lr = self.max_lr * (step / self.warmup_steps)
+
+        # 阶段2：稳定阶段 (max_lr)
+        stable_lr = self.max_lr
+
+        # 阶段3：线性衰减 (max_lr → 0)
+        decay_steps = self.total_steps - self.decay_start
+        decay_lr = self.max_lr * (1 - (step - self.decay_start) / decay_steps)
+
+        # 条件选择
+        return tf.case(
+            [
+                # 预热阶段
+                (step < self.warmup_steps, lambda: warmup_lr),
+                # 稳定阶段
+                (step < self.decay_start, lambda: stable_lr),
+                # 衰减阶段（需限制step不超过total_steps）
+                (step <= self.total_steps, lambda: decay_lr)
+            ],
+            default=lambda: tf.constant(0.0, dtype=tf.float32)
+        )
+
+class NNrecevierModel(Model):
+    def __init__(self, num_bits_per_symbol=6, cgnn_flag=False, multi_head=False, training=True):
+        super().__init__()
+        if cgnn_flag:
+            print('cgnn model!')
+            self.nnrecevier = CGNNRecevier(8, num_bits_per_symbol, multi_head = multi_head, training = training)
+        else:
+            self.nnrecevier = NNrecevier(num_bits_per_symbol)
+    @tf.function()
+    def call(self, inputs):
+        return self.nnrecevier(inputs)
+
+def create_snr_dataloaderv2(
+        data_dirs,
+        batch_size,
+        target_snr_range=(0, 36),
+        data_field='data',
+        label_field='label',
+        dtype=np.float32
+    ):
+    """
+    支持一个或多个数据根目录，每个根目录内部结构:
+      root/
+          SNR04/
+              xxx.mat
+          SNR10/
+              yyy.mat
+    返回 (tf.data.Dataset, total_samples)
+    """
+
+    # ---------- 1. 收集所有符合条件的 SNR 子目录 ----------
+    if isinstance(data_dirs, str):
+        data_dirs = [data_dirs]
+
+    snr_meta = []       # list of dicts: {key, dir_path, snr_val, root}
+    snr_file_dict = {}  # key -> list[path]
+    total_samples = 0
+
+    snr_regex = re.compile(r"[+-]?\d+")
+
+    for root in data_dirs:
+        for subdir in os.listdir(root):
+            if not subdir.startswith('SNR'):
+                continue
+            snr_match = snr_regex.findall(subdir)
+            if not snr_match:
+                continue
+            snr_val = int(snr_match[0])
+            if not (target_snr_range[0] <= snr_val <= target_snr_range[1]):
+                continue
+
+            dir_path = os.path.join(root, subdir)
+            files = [os.path.join(dir_path, f)
+                     for f in os.listdir(dir_path) if f.endswith('.mat')]
+            if not files:
+                continue
+
+            key = dir_path                             # 唯一键
+            snr_file_dict[key] = files
+            snr_meta.append({'key': key,
+                             'snr': snr_val,
+                             'subdir': subdir,
+                             'root': os.path.abspath(root)})
+            total_samples += len(files)
+
+    if not snr_meta:
+        raise ValueError("No SNR directories found that satisfy the filter.")
+
+    # 按 SNR 数值升序排序（纯粹为了打印和可读性）
+    snr_meta.sort(key=lambda x: x['snr'])
+    snr_keys = [m['key'] for m in snr_meta]
+
+    print(">> train data SNR list:")
+    for m in snr_meta:
+        print(f"  • {os.path.basename(m['root'])}/{m['subdir']}  (SNR={m['snr']} dB)")
+
+    # ---------- 2. 自动探测 sample 形状 ----------
+    probe_file = snr_file_dict[snr_keys[0]][0]
+    probe_mat = loadmat(probe_file)
+    idex = np.r_[0:9,10]#训练数据有误，dmrs通道多重复了一次，需要删除重复的这个通道
+    probe_data = probe_mat['trainingData'][data_field][0][0][..., idex]#删除重复的这个通道
+    probe_label = probe_mat['trainingData'][label_field][0][0]
+
+    if probe_data.ndim == 2:
+        probe_data = np.expand_dims(probe_data, -1)   # (H, W) -> (H, W, 1)
+
+    input_shape  = probe_data.shape[1:]               # 不含 batch
+    output_shape = probe_label.shape[1:]
+
+    # ---------- 3. 工具函数 ----------
+    def _mat_loader(path):
+        m = loadmat(path)
+        d = m['trainingData'][data_field][0][0][..., idex]#删除重复的这个通道
+        l = m['trainingData'][label_field][0][0]
+        if d.ndim == 2:
+            d = np.expand_dims(d, -1)
+        return d.astype(dtype), l.astype(dtype)
+
+    # ---------- 4. 生成器 ----------
+    def snr_generator():
+        rng = np.random.default_rng()                 # 独立随机数生成器
+        while True:
+            # a) 随机挑一个 SNR 目录（跨多个根目录）
+            key = rng.choice(snr_keys)
+            file_list = snr_file_dict[key]
+
+            # b) 在该目录内随机抽 batch
+            if batch_size > len(file_list):
+                # 允许放回抽样，或手动 raise Error / 警告
+                idx = rng.choice(len(file_list), batch_size, replace=True)
+            else:
+                idx = rng.choice(len(file_list), batch_size, replace=False)
+
+            batch_x, batch_y = [], []
+            for i in idx:
+                x, y = _mat_loader(file_list[i])
+                batch_x.append(x)
+                batch_y.append(y)
+
+            # c) 组批 -> (B, ...)； squeeze 掉 axis=1 维（若有）
+            yield (
+                np.squeeze(np.array(batch_x), axis=1),
+                np.squeeze(np.array(batch_y), axis=1)
+            )
+
+    # ---------- 5. 包装为 tf.data.Dataset ----------
+    dataset = tf.data.Dataset.from_generator(
+        snr_generator,
+        output_signature=(
+            tf.TensorSpec(shape=(batch_size, None, None, None),  dtype=tf.as_dtype(dtype)),
+            tf.TensorSpec(shape=(batch_size, None), dtype=tf.as_dtype(dtype)),
+        )
+    ).prefetch(tf.data.AUTOTUNE)
+
+    return dataset, total_samples
+
+def create_snr_dataloader(data_dir, batch_size, target_snr_range=(0,36), data_field='data', label_field='label'):
+    # 获取所有SNR目录并按SNR值排序
+    # snr_dirs = sorted(
+        # [d for d in os.listdir(data_dir) if d.startswith('SNR')],
+        # key=lambda x: int(re.findall(r"[+-]?\d+", x)[0])
+    # )
+
+    snr_dirs = sorted(
+        [d for d in os.listdir(data_dir) if d.startswith('SNR') and 
+        target_snr_range[0] <= int(re.findall(r"[+-]?\d+", d)[0]) <= target_snr_range[1]],
+        key=lambda x: int(re.findall(r"[+-]?\d+", x)[0])
+    )
+    print('train data snr:',snr_dirs)
+    # 构建文件路径字典 {SNR目录: [文件路径列表]}
+    snr_file_dict = {}
+    total_samples = 0
+    for snr_dir in snr_dirs:
+        dir_path = os.path.join(data_dir, snr_dir)
+        files = [os.path.join(dir_path, f) for f in os.listdir(dir_path)
+                 if f.endswith('.mat')]
+        total_samples+=len(files)
+        snr_file_dict[snr_dir] = files
+
+    # 自动获取数据形状
+    sample_mat = loadmat(snr_file_dict[snr_dirs[0]][0])
+    sample_data = sample_mat['trainingData'][data_field][0][0]
+    if sample_data.ndim == 2:
+        sample_data = np.expand_dims(sample_data, axis=-1)
+    input_shape = sample_data.shape[1::]
+    output_shape = sample_mat['trainingData'][label_field][0][0].shape[1::]
+
+    def mat_loader(file_path):
+        """加载并处理单个.mat文件"""
+        mat = loadmat(file_path)
+        data = mat['trainingData'][data_field][0][0]
+        label = mat['trainingData'][label_field][0][0]
+
+        # 确保数据维度正确
+        if data.ndim == 2:
+            data = np.expand_dims(data, axis=-1)
+        return data, label
+
+    def snr_generator():
+        """SNR批次生成器"""   
+        while True:
+            # 随机选择一个SNR目录
+            selected_snr = np.random.choice(snr_dirs)
+
+            print('Selected training snr {} dB'.format(selected_snr), end='\t')
+            file_list = snr_file_dict[selected_snr]
+
+            # 随机选择不重复的索引
+            indices = np.random.choice(len(file_list), batch_size, replace=False)
+
+            # 加载并处理数据
+            batch_data = []
+            batch_labels = []
+            for i in indices:
+                data, label = mat_loader(file_list[i])
+                batch_data.append(data)
+                batch_labels.append(label)
+
+            yield np.squeeze(np.array(batch_data),axis=1), np.squeeze(np.array(batch_labels),axis=1)
+
+    # 创建TensorFlow数据集
+    dataset = tf.data.Dataset.from_generator(
+        snr_generator,
+        output_signature=(
+            tf.TensorSpec(shape=(batch_size, None, None, None), dtype=tf.float32),
+            tf.TensorSpec(shape=(batch_size, None), dtype=tf.int32)
+        )
+    )
+
+    return dataset.prefetch(tf.data.AUTOTUNE),total_samples
+
+
+def count_bit_differences(tensor_a, tensor_b):
+    """
+    计算两个int8张量中对应位置bit不同的个数
+    参数:
+        tensor_a: shape=(batch_size, L) 的int8张量
+        tensor_b: shape=(batch_size, L) 的int8张量
+    返回:
+        shape=(batch_size,) 的张量，表示每个样本的bit差异总数
+    """
+    # 将int8转换为二进制表示（每个元素变成8bit的uint8）
+    bit_a = tf.bitwise.right_shift(tf.expand_dims(tensor_a, -1), tf.range(8, dtype=tf.int32))
+    bit_b = tf.bitwise.right_shift(tf.expand_dims(tensor_b, -1), tf.range(8, dtype=tf.int32))
+
+    # 获取每个bit的值 (0或1)
+    bit_a = tf.bitwise.bitwise_and(bit_a, 1)
+    bit_b = tf.bitwise.bitwise_and(bit_b, 1)
+
+    # 计算bit差异 (XOR操作)
+    diff_bits = tf.bitwise.bitwise_xor(bit_a, bit_b)
+
+    # 统计每个样本的总差异bit数
+    return tf.reduce_sum(diff_bits, axis=[1, 2])
+
+def loss_function(logits, labels, function,multi_head):
+    #logits shape is [batch_size, numFFT, numsymbs, numbits]
+    #labels shape is [batch_size, bits of codewords]
+    if multi_head:
+        loss = 0
+        for i in range(logits.shape[0]):
+            logits_tmp = tf.transpose(logits[i], perm=[0, 2, 1, 3]) #(batchsize, numSymbol, numFFT, numbits)
+            if (logits_tmp.shape[1]*logits_tmp.shape[2]*logits_tmp.shape[3] - labels.shape[1])//(logits_tmp.shape[2]*logits_tmp.shape[3])==2:
+                dmrs_loc = {2,11}
+            else:
+                dmrs_loc = {2}
+            #print(dmrs_loc)
+            valid_indices = [i for i in range(14) if i not in dmrs_loc]#delete dmrs
+            logits_tmp = tf.gather(logits_tmp,valid_indices,axis=1)
+            batch_size = logits_tmp.shape[0]
+            logits_tmp = tf.reshape(logits_tmp,[batch_size, -1])
+            bce = function(labels,logits_tmp)
+            rate = tf.constant(1.0, tf.float32) - bce / tf.math.log(2.)
+            loss += -1*rate
+        loss = loss/(i+1)
+    else:
+        logits = tf.transpose(logits, perm=[0, 2, 1, 3]) #(batchsize, numSymbol, numFFT, numbits)
+        #print(labels.shape)
+        #print(logits.shape)
+        if (logits.shape[1]*logits.shape[2]*logits.shape[3] - labels.shape[1])//(logits.shape[2]*logits.shape[3])==2:
+            dmrs_loc = {2,11}
+        else:
+            dmrs_loc = {2}
+        #print(dmrs_loc)
+        valid_indices = [i for i in range(14) if i not in dmrs_loc]#delete dmrs
+        logits = tf.gather(logits,valid_indices,axis=1)
+        batch_size = logits.shape[0]
+        logits = tf.reshape(logits,[batch_size, -1])
+        bce = function(labels,logits)
+        rate = tf.constant(1.0, tf.float32) - bce / tf.math.log(2.)
+        loss = -1*rate
+    return loss
+
+def log_metrics(step, loss, rate, summary_writer, mode="train"):
+    """记录指标到TensorBoard"""
+    with summary_writer.as_default():
+        tf.summary.scalar(f"{mode}_loss", loss, step=step)
+        tf.summary.scalar(f"{mode}_rate", rate, step=step)
+
+def train_model(model_weights_path, data_dir='./data/training'):
+    epochs = 2
+    training_batch_size = 20
+    multi_head = True
+    training_logdir = "./trainLog"
+    label = '256QAM-cgnn'
+    BCE = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+    current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    logdir = os.path.join(training_logdir, f"{label}-{current_time}")
+    summary_writer = tf.summary.create_file_writer(logdir)
+    model = NNrecevierModel(num_bits_per_symbol=8, cgnn_flag=True, multi_head=multi_head, training=True)
+    # optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
+    dummyData = tf.random.uniform([1, 128, 14, 10])
+    model(dummyData)
+    model.summary()
+    if os.path.exists(model_weights_path):
+        print('load exist weights,and training continue')
+        with open(model_weights_path, 'rb') as f:
+            weights = pickle.load(f)
+        # weights = weights[0:4]+weights[14:118]+weights[4:14]+weights[118:]
+        for i, w in enumerate(weights):
+            # if i<118:
+            model.nnrecevier.weights[i].assign(w)
+    # for layer in model.nnrecevier.layers[:-2]:  # 注意这里改为操作layers
+    #    layer.trainable = False
+    
+    print('loading data...')
+    dataset,total_samples = create_snr_dataloaderv2(data_dir, training_batch_size,(0,40))
+    print('total {} samples'.format(total_samples), end='\n')
+    steps_per_epoch = total_samples // training_batch_size
+    global_steps = epochs * steps_per_epoch
+    model_save_path = model_weights_path+'-init'
+    dataset = dataset.repeat()
+    optimizer = tf.keras.optimizers.AdamW(learning_rate=ThreePhaseLR(target_lr=0.001, total_steps=global_steps, warmup_steps=int(global_steps*0.02),
+                                                                     decay_start=int(0.1*global_steps)), weight_decay=1e-4, clipnorm=2.)
+    # optimizer = tf.keras.optimizers.AdamW(learning_rate=0.001)
+    for epoch in range(epochs):
+        print(f"\nEpoch {epoch+1}/{epochs}")
+        for step,(train_data, llr_label) in enumerate(dataset.take(steps_per_epoch)):
+            # Forward pass
+            global_step = epoch * steps_per_epoch + step
+            with tf.GradientTape() as tape:
+                llr_logits = model(train_data)
+                loss = loss_function(llr_logits,llr_label,BCE,multi_head)
+            # Computing and applying gradients
+            weights = tape.watched_variables()
+            grads = tape.gradient(loss, weights)
+            optimizer.apply_gradients(zip(grads, weights))
+            log_metrics(global_step, loss, -1*loss, summary_writer, mode="train")
+            print('Iteration {}/{},LR:{:.6}  Rate: {:.4f} bit'.format(global_step + 1, global_steps, optimizer.learning_rate.numpy(), -1*loss.numpy()), end='\n')
+            if (global_step + 1) % 500 == 0 or (global_step + 1) == global_steps:
+                # Save the weights in a file
+                weights = model.nnrecevier.weights
+                model_weights_path_save = model_save_path+'epoch{}-step{}'.format(epoch,global_step)
+                with open(model_weights_path_save, 'wb') as f:
+                    pickle.dump(weights, f)
+    print("\n" + "-"*50)  # 分隔线
+
+def fine_tune_model(model_weights_path, data_dir=r'D:\work\2025\deepRx\trainData'):
+    epochs = 2
+    training_batch_size = 1
+    training_logdir = "./trainLog"
+    model_save_path = model_weights_path+'fine_tune'
+    dataset,total_samples = create_snr_dataloader(data_dir, training_batch_size)
+    # total_samples = len(snr_dirs) * 10000  # 每个SNR目录固定10000个样本
+    print('total {} samples'.format(total_samples), end='\n')
+    steps_per_epoch = total_samples // training_batch_size
+    global_steps = epochs * steps_per_epoch
+    label = 'GroupNormSystemNerualRecevier-cgnn'
+    BCE = tf.keras.losses.BinaryCrossentropy(from_logits=True)
+    current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    logdir = os.path.join(training_logdir, f"{label}-{current_time}")
+    summary_writer = tf.summary.create_file_writer(logdir)
+    model = NNrecevierModel(6,True)
+    dummyData = tf.random.uniform([1, 128, 14, 8])
+    model(dummyData)
+    if os.path.exists(model_weights_path):
+        print('load exist weights,and training continue')
+        with open(model_weights_path, 'rb') as f:
+            weights = pickle.load(f)
+        for i, w in enumerate(weights):
+            model.nnrecevier.weights[i].assign(w)
+    for layer in model.nnrecevier.layers[:-2]:  # 注意这里改为操作layers
+        layer.trainable = False
+    model.summary()
+    optimizer = tf.keras.optimizers.AdamW(learning_rate=1e-5)
+    dataset = dataset.repeat()
+    for epoch in range(epochs):
+        print(f"\nEpoch {epoch+1}/{epochs}")
+        for step,(train_data, llr_label) in enumerate(dataset.take(steps_per_epoch)):
+            # Forward pass
+            global_step = epoch * steps_per_epoch + step
+            with tf.GradientTape() as tape:
+                llr_logits = model(train_data,training=True)
+                loss = loss_function(llr_logits,llr_label,BCE)
+            # Computing and applying gradients
+            weights = tape.watched_variables()
+            grads = tape.gradient(loss, weights)
+            optimizer.apply_gradients(zip(grads, weights))
+            log_metrics(global_step, loss, -1*loss, summary_writer, mode="train")
+            print('Iteration {}/{} LR:{:.6}  Rate: {:.4f} bit'.
+                  format(global_step + 1, global_steps, optimizer.learning_rate.numpy(), -1*loss.numpy()), end='\n')
+            if (global_step + 1) %100 == 0 or (global_step + 1) == global_steps:
+                # Save the weights in a file
+                weights = model.nnrecevier.weights
+                with open(model_save_path, 'wb') as f:
+                    pickle.dump(weights, f)
+    print("\n" + "-"*50)  # 分隔线
+
+def transferOnnx(model_weights_path = 'weights-GroupNormNerualRecevier-matlab-data-train'):
+    # export onnx model
+    deepRx2 = NNrecevierModel(num_bits_per_symbol=8, cgnn_flag=True, multi_head=True, training=False)
+    dummyData = tf.random.uniform([1, 128, 14, 10])
+    deepRx2(dummyData)
+    deepRx2.summary()
+    with open(model_weights_path, 'rb') as f:
+        weights = pickle.load(f)
+    # weights = weights[0:4]+weights[14:118]+weights[4:14]+weights[118:]
+    for i, w in enumerate(weights):
+        deepRx2.nnrecevier.weights[i].assign(w)
+    deepRx2.trainable = False
+    num_it = [8,4,2,1]
+    for it in num_it:
+        deepRx2.nnrecevier.num_it = it
+        output_path = model_weights_path+f'it{it}.onnx'
+        input_signature = [tf.TensorSpec(shape=[None, None, None, 10], dtype=tf.float32, name='input')]
+        onnx_model, _ = tf2onnx.convert.from_keras(
+            deepRx2,
+            input_signature=input_signature,
+            opset=18,
+            output_path=output_path)
+        print("ONNX 模型已导出到 {}".format(output_path))
+        # 加载 ONNX 模型
+        onnx_model = onnx.load(output_path)
+        # 检查模型是否有效
+        onnx.checker.check_model(onnx_model)
+        print("ONNX 模型验证成功")
+
+# 使用示例
+if __name__ == "__main__":
+    # model = NNrecevierModel(8, True)
+    # dummydata = tf.random.uniform([1, 128, 14, 8])
+    # model(dummydata)
+    # model.summary()
+    # dummydata = tf.random.uniform([1, 312, 12, 8])
+    # out=model(dummydata)
+    # print(out.shape)
+
+    model_weights_path = r'.\weights\256QAM\weights-cgnn2-init-initepoch0-step5999-initepoch1-step19999'
+    data_dir = [r'D:\githere\deepRX2\test\ulPhyTestPUSCH\radioPerformance\3GPP throughput case\data\256QAM-Train-Data']
+    # train_model(model_weights_path, data_dir)
+    transferOnnx(model_weights_path)

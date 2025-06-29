@@ -1,10 +1,10 @@
 # OFDM系统配置参数
-n_fft: 2048
-cp_len: 160
-mod_order: 2  # QPSK/16QAM/64QAM
+n_fft: 256
+cp_len: 32
+mod_order: 6  # QPSK/16QAM/64QAM
 num_symbols: 14
 snr_db: 15
-n_subcarrier: 1536
+n_subcarrier: 200
 num_tx_ant: 1
 num_rx_ant: 2
 code_rate: 1 # 1 for no FEC, float for FEC
@@ -12,7 +12,7 @@ pilot_pattern: comb
 pilot_spacing: 2
 pilot_symbols: [2,11]
 freq_offset: 0.02
-timing_offset: 100
+timing_offset: 10
 est_time: fft_ml  #fft_ml/diff_phase/ml_then_phase
 channel_type: multipath  #awgn/multipath/rayleigh/sionna_fading/sionna_tdl
 display_est_result: False  # 是否显示估计结果

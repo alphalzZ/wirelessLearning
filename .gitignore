@@ -1,6 +1,7 @@
 venv/
 src/__pycache__/
 __pycache__/
+train_log/
 *.pyc
 *.pyo
 *.pyd
