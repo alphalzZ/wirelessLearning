@@ -141,19 +141,22 @@ def train_model(model_weights_path):
     # Assuming data_generator produces received frequency-domain symbols and original bits
     cfg = load_config(r'config.yaml')  # Load OFDM configuration
     # Define steps per epoch for online generation
-    steps_per_epoch = 10 # Example value, can be adjusted
-
-    # Create TensorFlow dataset from online generator
-    # The generator is assumed to yield (received_freq_symbols, original_bits)
-    # received_freq_symbols shape: (batch_size, num_rx_ant, num_symbols, n_subcarrier)
-    # original_bits shape: (batch_size, k)
-    dataset = create_tf_dataset(cfg, training_batch_size)
+    steps_per_epoch = 5 # Example value, can be adjusted
 
     global_steps = epochs * steps_per_epoch
-    dataset = dataset.repeat()
     optimizer = tf.keras.optimizers.AdamW(learning_rate=ThreePhaseLR(target_lr=0.001, total_steps=global_steps, warmup_steps=int(global_steps*0.02),
                                                                      decay_start=int(0.1*global_steps)), weight_decay=1e-4, clipnorm=2.)
     for epoch in range(epochs):
+        # Create TensorFlow dataset from online generator
+        # The generator is assumed to yield (received_freq_symbols, original_bits)
+        # received_freq_symbols shape: (batch_size, num_rx_ant, num_symbols, n_subcarrier)
+        # original_bits shape: (batch_size, k)
+        cfg.snr_db = np.random.randint(10, 25)  # Random SNR for each epoch
+        cfg.timing_offset = np.random.randint(0, 20)  # Random timing offset for each epoch
+        cfg.freq_offset = np.random.uniform(-0.05, 0.05)  # Random frequency offset for each epoch
+        dataset = create_tf_dataset(cfg, training_batch_size)
+        dataset = dataset.repeat()
+        
         print(f"\nEpoch {epoch+1}/{epochs}")
         for step,(train_data, llr_label) in enumerate(dataset.take(steps_per_epoch)):
             # Transpose train_data to match model expected input shape [batch_size, n_subcarrier, num_symbols, num_rx_ant]
