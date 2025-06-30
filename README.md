@@ -9,6 +9,7 @@
 - AWGN和瑞利衰落信道模型
 - BER/SER性能评估
 - 可配置的系统参数
+- nnrx
 
 ## 目录结构
 
@@ -20,6 +21,11 @@ ofdm_sim/
 │   ├── ofdm_rx.py         # 接收端处理
 │   ├── channel.py         # 信道模型
 │   └── metrics.py         # 性能指标
+|   |—— nnrx/
+|       |—— customer-layers.py  #神经网络
+|       |—— data_generator.py   #本地数据生成
+|       |—— train_with_local.py #本地训练
+|       |—— train_with_remote.py#结合远端数据在线训练
 ├── experiments/           # 实验脚本
 ├── tests/                # 单元测试
 ├── assets/              # 资源文件
