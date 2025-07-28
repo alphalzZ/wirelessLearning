@@ -1,0 +1,333 @@
+"""
+OFDM发送端处理模块
+作者：AI助手
+日期：2024-05-31
+"""
+
+import numpy as np
+from typing import Tuple, Optional
+import sys
+from pathlib import Path
+import matplotlib.pyplot as plt
+
+# plt.rcParams['font.sans-serif'] = ['SimHei']  # Windows 黑体
+plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']  # Windows 微软雅黑
+# plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']  # macOS
+# plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC']  # Linux
+
+plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+
+# 添加项目根目录到Python路径
+project_root = str(Path(__file__).parent.parent)
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from src.config import OFDMConfig
+
+import numpy as np
+
+def compute_k(cfg: OFDMConfig, rate: float) -> int:
+    """根据码率计算信息比特数"""
+    total_bits = cfg.get_total_bits()
+    return int(total_bits * rate)
+
+def qam_modulation(bits: np.ndarray, Qm: int) -> np.ndarray:
+    """
+    Gray-coded QAM
+    Qm = 2 (QPSK) | 4 (16QAM) | 6 (64QAM)
+    Returns power-normalized symbols (E{|d|^2}=1).
+    """
+    if Qm not in (2, 4, 6):
+        raise ValueError("Qm must be 2, 4 or 6")
+    if bits.size % Qm:
+        raise ValueError(f"len(bits) must be a multiple of Qm={Qm}")
+
+    b = bits.astype(np.int8).reshape(-1, Qm)   # 强制 0/1 整数
+
+    if Qm == 2:                     # QPSK
+        i = 1 - 2 * b[:, 0]
+        q = 1 - 2 * b[:, 1]
+        norm = np.sqrt(2)
+
+    elif Qm == 4:                   # 16-QAM  (±1, ±3)
+        i = (1 - 2 * b[:, 0]) * (1 + 2 * b[:, 1])
+        q = (1 - 2 * b[:, 2]) * (1 + 2 * b[:, 3])
+        norm = np.sqrt(10)
+
+    else:                           # 64-QAM  (±1, ±3, ±5, ±7)
+        i = (1 - 2 * b[:, 0]) * (
+            4 * b[:, 1] + 2 * np.bitwise_xor(b[:, 1], b[:, 2]) + 1
+        )
+        q = (1 - 2 * b[:, 3]) * (
+            4 * b[:, 4] + 2 * np.bitwise_xor(b[:, 4], b[:, 5]) + 1
+        )
+        norm = np.sqrt(42)
+
+    return (i + 1j * q) / norm
+
+def qam_modulation_NR(bits: np.ndarray, Qm: int) -> np.ndarray:
+    """
+    5G NR Gray-coded QAM (38.211 §5.1)
+    Qm = 2 (QPSK) | 4 (16QAM) | 6 (64QAM)
+    Returns power-normalized symbols (E{|d|^2}=1).
+    """
+    if Qm not in (2, 4, 6):
+        raise ValueError("Qm must be 2, 4 or 6")
+    if bits.size % Qm:
+        raise ValueError(f"len(bits) must be a multiple of Qm={Qm}")
+
+    b = bits.astype(np.int8).reshape(-1, Qm)   # 强制 0/1 整数
+    if Qm == 2:                     # QPSK
+        i = 1 - 2 * b[:, 0]
+        q = 1 - 2 * b[:, 1]
+        norm = np.sqrt(2)
+        osyms = (i + 1j * q) / norm
+
+    elif Qm == 4:                   # 16-QAM  (±1, ±3)
+        i = (2 * b[:, 0] + b[:, 2])
+        q = (2 * b[:, 1] + b[:, 3])
+        c = np.array([1, 3, -1, -3])
+        norm = np.sqrt(10)
+        osyms = (c[i] + 1j*c[q]) / norm
+
+    else:                           # 64-QAM  (±1, ±3, ±5, ±7)
+        i = (4 * b[:, 0] + 2 * b[:,2] + b[:, 4])
+        q = (4 * b[:, 1]+ 2 * b[:,3] + b[:, 5])
+        c = np.array([3, 1, 5, 7, -3, -1,-5,-7])
+        norm = np.sqrt(42)
+        osyms = (c[i] + 1j*c[q]) / norm
+        
+    return osyms
+
+
+def insert_pilots(cfg: OFDMConfig, symbol_idx: int) -> np.ndarray:
+    """插入导频符号
+    
+    Args:
+        data_symbols: 数据符号
+        cfg: 系统配置参数
+        
+    Returns:
+        插入导频后的频域符号矩阵，shape (num_tx_ant, n_fft)
+    """
+    # 获取导频位置和数据位置
+    pilot_indices = cfg.get_pilot_indices()
+
+    # 生成导频符号
+    pilot_symbols = cfg.get_pilot_symbols(symbol_idx)
+
+    ofdm_symbol = np.zeros((cfg.num_tx_ant, cfg.n_fft), dtype=np.complex64)
+    if pilot_symbols.ndim == 1:
+        ofdm_symbol[:, pilot_indices] = pilot_symbols[None, :]
+    else:
+        if pilot_symbols.shape[0] != cfg.num_tx_ant:
+            raise ValueError("pilot symbol dimension mismatch")
+        ofdm_symbol[:, pilot_indices] = pilot_symbols
+
+    return ofdm_symbol
+def add_timing_offset_and_freq_offset(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
+    """添加定时偏移和频偏
+    
+    Args:
+        signal: 输入信号
+        cfg: 系统配置参数
+    """
+    time_len = signal.shape[-1]
+    phase_rotation = (
+        2 * np.pi * cfg.freq_offset * np.arange(time_len) / cfg.n_fft
+    )
+    phase = np.exp(1j * phase_rotation)
+    if signal.ndim == 1:
+        signal = signal * phase
+        signal = np.roll(signal, cfg.timing_offset)
+    else:
+        signal = signal * phase.reshape((1, -1))
+        signal = np.roll(signal, cfg.timing_offset, axis=-1)
+    return signal
+
+def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
+    """OFDM发送端处理
+    
+    Args:
+        bits: 输入比特流
+        cfg: 系统配置参数
+        
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: (时域信号, 频域符号)
+    """
+    bits = np.asarray(bits)
+    k = compute_k(cfg, cfg.code_rate)
+    bits = bits.reshape(cfg.num_tx_ant, -1)  # 确保是二维数组
+    if bits.size % k != 0:
+        raise ValueError(f"bits size must be a multiple of {k}")
+    if bits.ndim == 1:
+        bits = bits[None, :]
+    if bits.shape != (cfg.num_tx_ant, k//cfg.num_tx_ant):
+        raise ValueError(f"bits shape must be ({cfg.num_tx_ant}, {k})")
+
+    total_len = cfg.num_symbols * (cfg.n_fft + cfg.cp_len)
+    time_signal = np.zeros((cfg.num_tx_ant, total_len), dtype=np.complex64)
+    freq_symbols = np.zeros(
+        (cfg.num_tx_ant, cfg.num_symbols, cfg.n_fft), dtype=np.complex64
+    )
+
+    bits_per_symbol = cfg.get_total_bits_per_symbol()
+    carrier_indices = cfg.get_subcarrier_indices()
+
+    for ant in range(cfg.num_tx_ant):
+        b = bits[ant]
+        if cfg.code_rate < 1.0:
+            from src.fec import ldpc_encode
+
+            code_blocks = ldpc_encode(b.astype(np.int8), cfg, cfg.code_rate)
+            tx_bits = np.concatenate(code_blocks)
+        else:
+            tx_bits = b.astype(np.int8)
+
+        idx = 0
+        for i in range(cfg.num_symbols):
+            if cfg.has_pilot(i):
+                if cfg.display_est_result:
+                    print(f"insert pilot at {i} symbol")
+                ofdm_symbol = insert_pilots(cfg, i)[ant]
+            else:
+                start_idx = idx * bits_per_symbol
+                end_idx = start_idx + bits_per_symbol
+                symbol_bits = tx_bits[start_idx:end_idx]
+                data_symbols = qam_modulation(symbol_bits, cfg.mod_order)
+
+                ofdm_symbol = np.zeros(cfg.n_fft, dtype=np.complex64)
+                ofdm_symbol[carrier_indices] = data_symbols
+                idx += 1
+
+            freq_symbols[ant, i] = ofdm_symbol
+
+            time_symbol = np.fft.ifft(ofdm_symbol, cfg.n_fft) * np.sqrt(cfg.n_fft)
+            cp = time_symbol[-cfg.cp_len:]
+            time_symbol = np.concatenate([cp, time_symbol])
+            start = i * (cfg.n_fft + cfg.cp_len)
+            time_signal[ant, start : start + cfg.n_fft + cfg.cp_len] = time_symbol
+
+    sigScal = 10 ** (cfg.snr_db / 20)
+    time_signal *= sigScal
+
+    return time_signal, freq_symbols
+
+def plot_ofdm_symbol(ofdm_symbol: np.ndarray, pilot_indices: np.ndarray, 
+                    data_indices: np.ndarray, title: str = "OFDM符号"):
+    """绘制OFDM符号的星座图
+    
+    Args:
+        ofdm_symbol: OFDM符号
+        pilot_indices: 导频位置
+        data_indices: 数据位置
+        title: 图表标题
+    """
+    plt.figure(figsize=(10, 6))
+    
+    # 绘制导频符号
+    plt.scatter(ofdm_symbol[pilot_indices].real, 
+               ofdm_symbol[pilot_indices].imag,
+               c='red', label='导频', marker='x')
+    
+    # 绘制数据符号
+    plt.scatter(ofdm_symbol[data_indices].real,
+               ofdm_symbol[data_indices].imag,
+               c='blue', label='数据', marker='o')
+    
+    plt.grid(True)
+    plt.axis('equal')
+    plt.xlabel('实部')
+    plt.ylabel('虚部')
+    plt.title(title)
+    plt.legend()
+    plt.show()
+
+def plot_ofdm_resource_grid(freq_symbols: np.ndarray, cfg: OFDMConfig, title: str = "OFDM资源网格"):
+    """绘制OFDM资源网格
+    
+    Args:
+        freq_symbols: 频域符号数组 [num_symbols, n_fft]
+        pilot_indices: 导频位置
+        data_indices: 数据位置
+        cfg: 系统配置参数
+        title: 图表标题
+    """
+    plt.figure(figsize=(12, 6))
+    
+    # 创建资源网格图
+    grid = np.zeros((freq_symbols.shape[-1], freq_symbols.shape[-2]))
+    pilot_indices = cfg.get_pilot_indices()
+    data_indices = cfg.get_data_indices()
+    subcarrier_indices = cfg.get_subcarrier_indices()
+    # 标记导频和数据位置
+    for i in range(freq_symbols.shape[1]):
+        if cfg.has_pilot(i):
+            grid[subcarrier_indices, i] = 1  # 导频
+            # grid[data_indices, i] = 0.5  # 数据
+        else:
+            # 其他符号只包含数据
+            grid[subcarrier_indices, i] = 0.5
+    
+    # 绘制资源网格
+    plt.imshow(grid, aspect='auto', cmap='coolwarm')
+    plt.colorbar(label='资源类型 (1:导频, 0.5:数据, 0:未使用)')
+    
+    # 设置坐标轴
+    plt.xlabel('OFDM符号索引')
+    plt.ylabel('子载波索引')
+    plt.title(title)
+    
+    # 添加图例
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='red', label='导频'),
+        Patch(facecolor='blue', label='未使用'),
+        Patch(facecolor='white', label='数据')
+    ]
+    plt.legend(handles=legend_elements, loc='upper right')
+    
+    # 添加网格线
+    plt.grid(True, color='gray', linestyle='--', alpha=0.5)
+    
+    plt.show()
+
+if __name__ == "__main__":
+    # 创建测试配置
+    cfg = OFDMConfig(
+        n_fft=256,
+        n_subcarrier=200,
+        cp_len=16,
+        mod_order=2,  # 16QAM
+        num_symbols=14,  # 14个OFDM符号
+        pilot_pattern='comb',
+        pilot_spacing=2,  # 频域间隔改为2
+        pilot_symbols=[2,11],  # 只在第2和第11个符号上有导频
+        code_rate= 1,
+        num_rx_ant=2,
+        num_tx_ant=2,
+    )
+    # 生成随机比特流
+    np.random.seed(42)
+    k = compute_k(cfg, cfg.code_rate)
+    test_bits = np.random.randint(0, 2, k)
+    
+    # 测试完整的OFDM发送处理
+    print("\n测试OFDM发送处理...")
+    time_signal, freq_symbols = ofdm_tx(test_bits, cfg)
+    print(f"时域信号长度: {len(time_signal)}")
+    print(f"时域信号功率: {np.mean(np.abs(time_signal)**2):.3f}")
+    
+    # 绘制时域信号
+    plt.figure(figsize=(12, 4))
+    plt.plot(np.sum(np.abs(time_signal), axis=0), color='blue')
+    plt.grid(True)
+    plt.xlabel('采样点')
+    plt.ylabel('幅度')
+    plt.title('OFDM时域信号')
+    plt.show()
+    
+    # 绘制资源网格
+    plot_ofdm_resource_grid(freq_symbols, cfg,
+                          "OFDM资源网格（红色为导频，蓝色为数据）")
+    
