@@ -23,6 +23,7 @@ from src.ofdm_rx import (
     estimate_frequency_offset,
     compensate_frequency_offset,
     compensate_timing_offset,
+    estimate_channel
     )
 
 def create_data(cfg: OFDMConfig, batch_size: int) -> Generator[Tuple[np.ndarray, np.ndarray], None, None]:
@@ -39,11 +40,7 @@ def create_data(cfg: OFDMConfig, batch_size: int) -> Generator[Tuple[np.ndarray,
         元组的第一个元素是接收到的时域信号 (X)，形状为 (batch_size, num_tx_ant, signal_len)。
         元组的第二个元素是原始的频域符号 (y)，形状为 (batch_size, num_tx_ant, num_symbols, n_fft)。
     """
-    batch_count = 0  # 添加计数器
     while True:
-        if batch_count % 100 == 0:  # 每100个批次打印一次随机种子
-            print(f"生成新的批次 {batch_count}, 随机种子: {np.random.randint(0, 1000000)}")
-        batch_count += 1
         
         batch_x = []
         batch_y = []
@@ -99,8 +96,6 @@ def create_data(cfg: OFDMConfig, batch_size: int) -> Generator[Tuple[np.ndarray,
                 est_freq = np.array(est_freq_offset)
             est_timing = np.mean(est_time,axis=1)
             est_freq_offset = np.mean(est_freq, axis=1)
-            if cfg.display_est_result:
-                print(f"估计的时延: {est_timing}, 估计的频偏: {est_freq_offset}")
 
             # 逐层逐天线补偿频偏
             comp_ant = [
@@ -127,9 +122,18 @@ def create_data(cfg: OFDMConfig, batch_size: int) -> Generator[Tuple[np.ndarray,
             ]
 
             signal_timing = np.stack(comp_ant, axis=0) # (num_ant, num_symbols, n_subcarrier)
-            real_part = np.real(signal_timing)
-            imag_part = np.imag(signal_timing)
-            batch_x.append(np.concatenate((real_part, imag_part), axis=0, dtype=np.float32))  # 将实部和虚部堆叠成最后一维
+
+            h_est_ant = []
+            for a in range(num_ant):
+                h_est_tmp = estimate_channel(signal_timing[a], cfg)
+                h_est_ant.append(h_est_tmp)
+            h_est = np.stack(h_est_ant, axis=0)
+            rx_real_part = np.real(signal_timing)
+            rx_imag_part = np.imag(signal_timing)
+            h_real_part = np.real(h_est)
+            h_imag_part = np.imag(h_est)
+
+            batch_x.append(np.concatenate((rx_real_part, rx_imag_part, h_real_part, h_imag_part), axis=0, dtype=np.float32))  # 将实部和虚部堆叠成最后一维
             batch_y.append(bits)  # 将比特转换为一行
 
         # 将列表转换为numpy数组
@@ -150,11 +154,9 @@ def create_tf_dataset(cfg: OFDMConfig, batch_size: int) -> tf.data.Dataset:
     """
     # 获取接收信号和频域符号的形状和类型
     k = compute_k(cfg, cfg.code_rate)
-    bits = np.random.randint(0, 2, k)
-    tx_signal, freq_symbols = ofdm_tx(bits, cfg)
     
     output_signature = (
-        tf.TensorSpec(shape=(batch_size, 2*cfg.num_rx_ant, cfg.num_symbols, cfg.n_subcarrier), dtype=np.float32),
+        tf.TensorSpec(shape=(batch_size, 4*cfg.num_rx_ant, cfg.num_symbols, cfg.n_subcarrier), dtype=np.float32),
         tf.TensorSpec(shape=(batch_size, k), dtype=np.float32)
     )
 
@@ -179,7 +181,12 @@ if __name__ == '__main__':
         snr_db=20,
         channel_type='multipath'
     )
-
+    # 测试create_data
+    gen = create_data(config, 1)
+    for i in range(10):
+        print(i)
+        x,y = next(gen)
+        print(x.shape)
     # 2. 创建TensorFlow数据集
     BATCH_SIZE = 16
     STEPS_PER_EPOCH = 100
