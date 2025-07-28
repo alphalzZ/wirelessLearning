@@ -25,7 +25,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.config import OFDMConfig
-from src.ofdm_tx import qam_modulation,ofdm_tx
+from src.ofdm_tx import qam_modulation,qam_modulation_NR,ofdm_tx
 
 
 def estimate_frequency_offset(
@@ -109,8 +109,8 @@ def compensate_frequency_offset(
 
     elif signal.ndim == 2:  # ----- 频域：仅补公共相位 -----
         n_sym, n_fft = signal.shape
-        if n_fft != cfg.n_fft:
-            raise ValueError("signal.shape[1] 与 cfg.n_fft 不一致")
+        # if n_fft != cfg.n_fft:
+        #     raise ValueError("signal.shape[1] 与 cfg.n_fft 不一致")
 
         # 每个 OFDM 符号对应的时域"参考采样"索引:
         # 起始点位于 CP 尾端 → n0 = Ncp + m·(N+Ncp)
@@ -344,7 +344,7 @@ def estimate_channel(
     else:
         num_layer = 1
         h_layers = (rx_pilots[:, pilot_indices] * np.conj(pilot_symbols))[:, :]
-
+    
     h_pilot_full = np.zeros((len(pilot_symbol_indices), cfg.n_subcarrier), dtype=np.complex64)
     for idx, sc in enumerate(pilot_indices):
         h_pilot_full[:, sc] = h_layers[:, idx]
@@ -841,7 +841,7 @@ def qam_demodulation(
     # --- 1) 生成 Gray 星座表 ---
     M = 1 << Qm
     bit_patterns = np.array(list(itertools.product([0, 1], repeat=Qm)), dtype=np.int8)
-    ref_constellation = qam_modulation(bit_patterns.flatten(), Qm)
+    ref_constellation = qam_modulation_NR(bit_patterns.flatten(), Qm)
 
     # --- 2) 计算距离矩阵 ---
     rx = symbols.flatten()[:, None]
@@ -950,8 +950,6 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
         h_est = np.stack(h_est_ant, axis=0)
         h_est_layer.append(h_est)
     h_est = np.stack(h_est_layer, axis=0) # (num_layer, num_ant, num_symbols, n_subcarrier)
-    noise_layers = []
-    power_layers = []
 
     noise_ant = []
     power_ant = []
@@ -971,8 +969,8 @@ def ofdm_rx(signal: np.ndarray, cfg: OFDMConfig) -> np.ndarray:
             noise_cov_layer = noise_covariance_estimate(signal_timing, h_est[l], cfg, pilot_symbols[l], pilot_indices)
             noise_cov_list.append(noise_cov_layer)
         noise_cov = np.stack(noise_cov_list, axis=0)
-    rx_combined_list = []
     
+    rx_combined_list = []
     if cfg.equ_method == 'irc' or cfg.equ_method == 'mrc':
         for l in range(num_layer):
             eq = channel_equalization(signal_timing, h_est[l], noise_var[l], cfg, noise_cov[l])
@@ -1015,6 +1013,8 @@ def ofdm_rx_matlab(rx_symbols_real, rx_symbols_imag, pilot_symbol_indices, pilot
     # simulation with matlab
     rx_symbols = rx_symbols_real+1j*rx_symbols_imag
     pilot_symbols = pilot_symbols_real+1j*pilot_symbols_imag
+    print(f'rx_symbol shape:{rx_symbols.shape}')
+    print(f'pilot_symbols shape:{pilot_symbols.shape}')
     num_tx_ant = pilot_symbols.shape[0]
     pilot_indices = pilot_indices.astype(np.int32)
     dummyCfg = OFDMConfig()
@@ -1028,7 +1028,7 @@ def ofdm_rx_matlab(rx_symbols_real, rx_symbols_imag, pilot_symbol_indices, pilot
     dummyCfg.mod_order = np.int8(mod_order)
     dummyCfg.num_symbols = rx_symbols.shape[1]
     dummyCfg.equ_method = 'mmse'
-    dummyCfg.win_size = [8,2,2]
+    dummyCfg.win_size = [8,4,2]
     num_layer = dummyCfg.num_tx_ant
     num_ant = dummyCfg.num_rx_ant
     print(f'eq method:{dummyCfg.equ_method}')
@@ -1166,163 +1166,165 @@ def debug(data_path):
         plt.show()   
     
 if __name__ == "__main__":
+    path = r'D:\githere\nr-phy-sim\test\ulPhyTestPUSCH\radioPerformance\3GPP throughput case\data'
+    debug(path)
     # 创建测试配置
-    cfg = OFDMConfig(
-        n_fft=256,
-        n_subcarrier=224,
-        cp_len=32,
-        mod_order=4,  # 16QAM
-        num_symbols=14,  # 测试用较少的符号数
-        pilot_pattern='comb',
-        pilot_spacing=2,  # 导频间隔
-        pilot_symbols=[1,5],  # 在第2和第11个符号上插入导频
-        code_rate= 1
-    )
-    from src.ofdm_tx import compute_k
-    # 生成随机比特流
-    np.random.seed(42)
-    k = compute_k(cfg, cfg.code_rate)
-    test_bits = np.random.randint(0, 2, k)
-    # 生成OFDM符号
-    time_signal, freq_symbols = ofdm_tx(test_bits, cfg)
+    # cfg = OFDMConfig(
+    #     n_fft=256,
+    #     n_subcarrier=224,
+    #     cp_len=32,
+    #     mod_order=4,  # 16QAM
+    #     num_symbols=14,  # 测试用较少的符号数
+    #     pilot_pattern='comb',
+    #     pilot_spacing=2,  # 导频间隔
+    #     pilot_symbols=[1,5],  # 在第2和第11个符号上插入导频
+    #     code_rate= 1
+    # )
+    # from src.ofdm_tx import compute_k
+    # # 生成随机比特流
+    # np.random.seed(42)
+    # k = compute_k(cfg, cfg.code_rate)
+    # test_bits = np.random.randint(0, 2, k)
+    # # 生成OFDM符号
+    # time_signal, freq_symbols = ofdm_tx(test_bits, cfg)
     
-    # 获取导频信息
-    pilot_symbols = cfg.get_pilot_symbols()
-    pilot_indices = cfg.get_pilot_indices()-cfg.get_subcarrier_offset()
-    # 打印调试信息
-    print(f"时域信号长度: {len(time_signal)}")
+    # # 获取导频信息
+    # pilot_symbols = cfg.get_pilot_symbols()
+    # pilot_indices = cfg.get_pilot_indices()-cfg.get_subcarrier_offset()
+    # # 打印调试信息
+    # print(f"时域信号长度: {len(time_signal)}")
     
-    # 测试频偏估计和补偿
-    print("\n测试频偏估计...")
-    freq_offset = 0.1  # 添加频偏
-    t = np.arange(len(time_signal))
-    phase_rotation = 2 * np.pi * freq_offset * t / cfg.n_fft
-    signal_with_freq_offset = time_signal * np.exp(1j * phase_rotation)
+    # # 测试频偏估计和补偿
+    # print("\n测试频偏估计...")
+    # freq_offset = 0.1  # 添加频偏
+    # t = np.arange(len(time_signal))
+    # phase_rotation = 2 * np.pi * freq_offset * t / cfg.n_fft
+    # signal_with_freq_offset = time_signal * np.exp(1j * phase_rotation)
     
-    # 移除CP并进行FFT
-    rx_symbols_freq_offset = remove_cp_and_fft(signal_with_freq_offset, cfg)
+    # # 移除CP并进行FFT
+    # rx_symbols_freq_offset = remove_cp_and_fft(signal_with_freq_offset, cfg)
     
-    # 估计频偏
-    est_freq_offset = estimate_frequency_offset(rx_symbols_freq_offset, pilot_symbols, pilot_indices, cfg)
-    print(f"实际频偏: {freq_offset:.3f}")
-    print(f"估计频偏: {est_freq_offset:.3f}")
-    # 频域频偏补偿
-    # ---------- 1. 构造 per‑subcarrier 相位斜率向量 ----------
-    # N = cfg.n_fft
-    # k = np.arange(N)                     # 0 .. N-1
-    # # e^{-j pi ε (1 - 2k/N)}   =   e^{-j pi ε} · e^{+j 2π ε k / N}
-    # slope = np.exp(+1j * 2 * np.pi * est_freq_offset * (k / N - 0.5))
+    # # 估计频偏
+    # est_freq_offset = estimate_frequency_offset(rx_symbols_freq_offset, pilot_symbols, pilot_indices, cfg)
+    # print(f"实际频偏: {freq_offset:.3f}")
+    # print(f"估计频偏: {est_freq_offset:.3f}")
+    # # 频域频偏补偿
+    # # ---------- 1. 构造 per‑subcarrier 相位斜率向量 ----------
+    # # N = cfg.n_fft
+    # # k = np.arange(N)                     # 0 .. N-1
+    # # # e^{-j pi ε (1 - 2k/N)}   =   e^{-j pi ε} · e^{+j 2π ε k / N}
+    # # slope = np.exp(+1j * 2 * np.pi * est_freq_offset * (k / N - 0.5))
 
-    # # ---------- 2. 构造 per‑symbol CPE 向量 ----------
-    # n_sym = rx_symbols_freq_offset.shape[0]
-    # time_index = np.arange(n_sym) * (N + cfg.cp_len) + cfg.cp_len
-    # cpe = np.exp(
-    #     -1j * 2 * np.pi * est_freq_offset * time_index / N
-    # ).astype(rx_symbols_freq_offset.dtype)
-    # ---------- 3. 频域补偿：广播乘 ----------
-    # rx_symbols_freq_compensation = rx_symbols_freq_offset * (cpe[:, None] * slope[None, :])
+    # # # ---------- 2. 构造 per‑symbol CPE 向量 ----------
+    # # n_sym = rx_symbols_freq_offset.shape[0]
+    # # time_index = np.arange(n_sym) * (N + cfg.cp_len) + cfg.cp_len
+    # # cpe = np.exp(
+    # #     -1j * 2 * np.pi * est_freq_offset * time_index / N
+    # # ).astype(rx_symbols_freq_offset.dtype)
+    # # ---------- 3. 频域补偿：广播乘 ----------
+    # # rx_symbols_freq_compensation = rx_symbols_freq_offset * (cpe[:, None] * slope[None, :])
 
-    # 时域频偏补偿
-    # phase_compensation = np.exp(-1j * 2 * np.pi * est_freq_offset * t / cfg.n_fft)
-    # signal_with_freq_offset_compensation = signal_with_freq_offset * phase_compensation
-    signal_with_freq_offset_compensation = compensate_frequency_offset(signal_with_freq_offset, est_freq_offset, cfg)
-    rx_symbols_freq_compensation = remove_cp_and_fft(signal_with_freq_offset_compensation, cfg)
+    # # 时域频偏补偿
+    # # phase_compensation = np.exp(-1j * 2 * np.pi * est_freq_offset * t / cfg.n_fft)
+    # # signal_with_freq_offset_compensation = signal_with_freq_offset * phase_compensation
+    # signal_with_freq_offset_compensation = compensate_frequency_offset(signal_with_freq_offset, est_freq_offset, cfg)
+    # rx_symbols_freq_compensation = remove_cp_and_fft(signal_with_freq_offset_compensation, cfg)
 
     
-    # 测试时延估计和补偿
-    print("\n测试时延估计...")
-    timing_offset = 10  # 添加时延
-    signal_with_timing = np.roll(time_signal, timing_offset)
+    # # 测试时延估计和补偿
+    # print("\n测试时延估计...")
+    # timing_offset = 10  # 添加时延
+    # signal_with_timing = np.roll(time_signal, timing_offset)
     
-    # 移除CP并进行FFT
-    rx_symbols_timing = remove_cp_and_fft(signal_with_timing, cfg)
-    rx_symbols_timing_compensation = np.zeros_like(rx_symbols_timing)
-    # 估计时延
-    est_timing = estimate_timing_offset_diff_phase(rx_symbols_timing, pilot_symbols, pilot_indices, cfg)
-    print(f"实际时延: {timing_offset}")
-    print(f"估计时延: {est_timing}")
-    # 时延补偿
-    # for i in range(rx_symbols_timing.shape[0]):
-    #     # 补偿相位旋转
-    #     phase_compensation = np.exp(-1j * 2 * np.pi *est_timing * np.arange(cfg.n_subcarrier) / cfg.n_fft)
-    #     rx_symbols_timing_compensation[i] = rx_symbols_timing[i] * phase_compensation
-    rx_symbols_timing_compensation = compensate_timing_offset(rx_symbols_timing, est_timing, cfg)
-    # 获取含导频的OFDM符号索引和数据OFDM符号索引
-    pilot_symbol_indices = cfg.get_pilot_symbol_indices()
-    data_symbol_indices = [i for i in range(cfg.num_symbols) if not cfg.has_pilot(i) or i not in pilot_symbol_indices]
-    # 若所有符号都含导频，则数据符号索引取第一个非导频符号，否则取第一个符号
-    data_symbol_idx = data_symbol_indices[0] if data_symbol_indices else 0
-    pilot_symbol_idx = pilot_symbol_indices[0]
+    # # 移除CP并进行FFT
+    # rx_symbols_timing = remove_cp_and_fft(signal_with_timing, cfg)
+    # rx_symbols_timing_compensation = np.zeros_like(rx_symbols_timing)
+    # # 估计时延
+    # est_timing = estimate_timing_offset_diff_phase(rx_symbols_timing, pilot_symbols, pilot_indices, cfg)
+    # print(f"实际时延: {timing_offset}")
+    # print(f"估计时延: {est_timing}")
+    # # 时延补偿
+    # # for i in range(rx_symbols_timing.shape[0]):
+    # #     # 补偿相位旋转
+    # #     phase_compensation = np.exp(-1j * 2 * np.pi *est_timing * np.arange(cfg.n_subcarrier) / cfg.n_fft)
+    # #     rx_symbols_timing_compensation[i] = rx_symbols_timing[i] * phase_compensation
+    # rx_symbols_timing_compensation = compensate_timing_offset(rx_symbols_timing, est_timing, cfg)
+    # # 获取含导频的OFDM符号索引和数据OFDM符号索引
+    # pilot_symbol_indices = cfg.get_pilot_symbol_indices()
+    # data_symbol_indices = [i for i in range(cfg.num_symbols) if not cfg.has_pilot(i) or i not in pilot_symbol_indices]
+    # # 若所有符号都含导频，则数据符号索引取第一个非导频符号，否则取第一个符号
+    # data_symbol_idx = data_symbol_indices[0] if data_symbol_indices else 0
+    # pilot_symbol_idx = pilot_symbol_indices[0]
 
-    plt.figure(figsize=(15, 10))
+    # plt.figure(figsize=(15, 10))
     
-    # 绘制频偏测试结果
-    plt.subplot(231)
-    plt.scatter(freq_symbols[data_symbol_idx].real, freq_symbols[data_symbol_idx].imag, c='blue', label='数据')
-    plt.scatter(freq_symbols[pilot_symbol_idx, pilot_indices].real, freq_symbols[pilot_symbol_idx, pilot_indices].imag, 
-               c='red', marker='x', label='导频')
-    plt.grid(True)
-    plt.axis('equal')
-    plt.xlabel('实部')
-    plt.ylabel('虚部')
-    plt.title(f'原始OFDM符号（数据符号{data_symbol_idx}，导频符号{pilot_symbol_idx}）')
-    plt.legend()
+    # # 绘制频偏测试结果
+    # plt.subplot(231)
+    # plt.scatter(freq_symbols[data_symbol_idx].real, freq_symbols[data_symbol_idx].imag, c='blue', label='数据')
+    # plt.scatter(freq_symbols[pilot_symbol_idx, pilot_indices].real, freq_symbols[pilot_symbol_idx, pilot_indices].imag, 
+    #            c='red', marker='x', label='导频')
+    # plt.grid(True)
+    # plt.axis('equal')
+    # plt.xlabel('实部')
+    # plt.ylabel('虚部')
+    # plt.title(f'原始OFDM符号（数据符号{data_symbol_idx}，导频符号{pilot_symbol_idx}）')
+    # plt.legend()
     
-    plt.subplot(232)
-    plt.scatter(rx_symbols_freq_offset[data_symbol_idx].real, rx_symbols_freq_offset[data_symbol_idx].imag, c='blue', label='数据')
-    plt.scatter(rx_symbols_freq_offset[pilot_symbol_idx, pilot_indices].real, rx_symbols_freq_offset[pilot_symbol_idx, pilot_indices].imag, 
-               c='red', marker='x', label='导频')
-    plt.grid(True)
-    plt.axis('equal')
-    plt.xlabel('实部')
-    plt.ylabel('虚部')
-    plt.title(f'加频偏后的符号\n(数据符号{data_symbol_idx}，导频符号{pilot_symbol_idx}，频偏={freq_offset:.3f})')
-    plt.legend()
+    # plt.subplot(232)
+    # plt.scatter(rx_symbols_freq_offset[data_symbol_idx].real, rx_symbols_freq_offset[data_symbol_idx].imag, c='blue', label='数据')
+    # plt.scatter(rx_symbols_freq_offset[pilot_symbol_idx, pilot_indices].real, rx_symbols_freq_offset[pilot_symbol_idx, pilot_indices].imag, 
+    #            c='red', marker='x', label='导频')
+    # plt.grid(True)
+    # plt.axis('equal')
+    # plt.xlabel('实部')
+    # plt.ylabel('虚部')
+    # plt.title(f'加频偏后的符号\n(数据符号{data_symbol_idx}，导频符号{pilot_symbol_idx}，频偏={freq_offset:.3f})')
+    # plt.legend()
     
-    plt.subplot(233)
-    plt.scatter(rx_symbols_freq_compensation[data_symbol_idx].real, rx_symbols_freq_compensation[data_symbol_idx].imag, c='blue', label='数据')
-    plt.scatter(rx_symbols_freq_compensation[pilot_symbol_idx, pilot_indices].real, rx_symbols_freq_compensation[pilot_symbol_idx, pilot_indices].imag, 
-               c='red', marker='x', label='导频')
-    plt.grid(True)
-    plt.axis('equal')
-    plt.xlabel('实部')
-    plt.ylabel('虚部')
-    plt.title(f'频偏补偿后的符号\n(数据符号{data_symbol_idx}，导频符号{pilot_symbol_idx}，估计频偏={est_freq_offset:.3f})')
-    plt.legend()
+    # plt.subplot(233)
+    # plt.scatter(rx_symbols_freq_compensation[data_symbol_idx].real, rx_symbols_freq_compensation[data_symbol_idx].imag, c='blue', label='数据')
+    # plt.scatter(rx_symbols_freq_compensation[pilot_symbol_idx, pilot_indices].real, rx_symbols_freq_compensation[pilot_symbol_idx, pilot_indices].imag, 
+    #            c='red', marker='x', label='导频')
+    # plt.grid(True)
+    # plt.axis('equal')
+    # plt.xlabel('实部')
+    # plt.ylabel('虚部')
+    # plt.title(f'频偏补偿后的符号\n(数据符号{data_symbol_idx}，导频符号{pilot_symbol_idx}，估计频偏={est_freq_offset:.3f})')
+    # plt.legend()
     
-    # 绘制时延测试结果
-    plt.subplot(234)
-    plt.scatter(freq_symbols[data_symbol_idx].real, freq_symbols[data_symbol_idx].imag, c='blue', label='数据')
-    plt.scatter(freq_symbols[pilot_symbol_idx, pilot_indices].real, freq_symbols[pilot_symbol_idx, pilot_indices].imag, 
-               c='red', marker='x', label='导频')
-    plt.grid(True)
-    plt.axis('equal')
-    plt.xlabel('实部')
-    plt.ylabel('虚部')
-    plt.title(f'原始OFDM符号（数据符号{data_symbol_idx}，导频符号{pilot_symbol_idx}）')
-    plt.legend()
+    # # 绘制时延测试结果
+    # plt.subplot(234)
+    # plt.scatter(freq_symbols[data_symbol_idx].real, freq_symbols[data_symbol_idx].imag, c='blue', label='数据')
+    # plt.scatter(freq_symbols[pilot_symbol_idx, pilot_indices].real, freq_symbols[pilot_symbol_idx, pilot_indices].imag, 
+    #            c='red', marker='x', label='导频')
+    # plt.grid(True)
+    # plt.axis('equal')
+    # plt.xlabel('实部')
+    # plt.ylabel('虚部')
+    # plt.title(f'原始OFDM符号（数据符号{data_symbol_idx}，导频符号{pilot_symbol_idx}）')
+    # plt.legend()
     
-    plt.subplot(235)
-    plt.scatter(rx_symbols_timing[data_symbol_idx].real, rx_symbols_timing[data_symbol_idx].imag, c='blue', label='数据')
-    plt.scatter(rx_symbols_timing[pilot_symbol_idx, pilot_indices].real, rx_symbols_timing[pilot_symbol_idx, pilot_indices].imag, 
-               c='red', marker='x', label='导频')
-    plt.grid(True)
-    plt.axis('equal')
-    plt.xlabel('实部')
-    plt.ylabel('虚部')
-    plt.title(f'加时延后的符号\n(数据符号{data_symbol_idx}，导频符号{pilot_symbol_idx}，时延={timing_offset})')
-    plt.legend()
+    # plt.subplot(235)
+    # plt.scatter(rx_symbols_timing[data_symbol_idx].real, rx_symbols_timing[data_symbol_idx].imag, c='blue', label='数据')
+    # plt.scatter(rx_symbols_timing[pilot_symbol_idx, pilot_indices].real, rx_symbols_timing[pilot_symbol_idx, pilot_indices].imag, 
+    #            c='red', marker='x', label='导频')
+    # plt.grid(True)
+    # plt.axis('equal')
+    # plt.xlabel('实部')
+    # plt.ylabel('虚部')
+    # plt.title(f'加时延后的符号\n(数据符号{data_symbol_idx}，导频符号{pilot_symbol_idx}，时延={timing_offset})')
+    # plt.legend()
     
-    plt.subplot(236)
-    plt.scatter(rx_symbols_timing_compensation[data_symbol_idx].real, rx_symbols_timing_compensation[data_symbol_idx].imag, c='blue', label='数据')
-    plt.scatter(rx_symbols_timing_compensation[pilot_symbol_idx, pilot_indices].real, rx_symbols_timing_compensation[pilot_symbol_idx, pilot_indices].imag, 
-               c='red', marker='x', label='导频')
-    plt.grid(True)
-    plt.axis('equal')
-    plt.xlabel('实部')
-    plt.ylabel('虚部')
-    plt.title(f'时延补偿后的符号\n(数据符号{data_symbol_idx}，导频符号{pilot_symbol_idx}，估计时延={est_timing})')
-    plt.legend()
+    # plt.subplot(236)
+    # plt.scatter(rx_symbols_timing_compensation[data_symbol_idx].real, rx_symbols_timing_compensation[data_symbol_idx].imag, c='blue', label='数据')
+    # plt.scatter(rx_symbols_timing_compensation[pilot_symbol_idx, pilot_indices].real, rx_symbols_timing_compensation[pilot_symbol_idx, pilot_indices].imag, 
+    #            c='red', marker='x', label='导频')
+    # plt.grid(True)
+    # plt.axis('equal')
+    # plt.xlabel('实部')
+    # plt.ylabel('虚部')
+    # plt.title(f'时延补偿后的符号\n(数据符号{data_symbol_idx}，导频符号{pilot_symbol_idx}，估计时延={est_timing})')
+    # plt.legend()
     
-    plt.tight_layout()
-    plt.show() 
+    # plt.tight_layout()
+    # plt.show() 

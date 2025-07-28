@@ -41,7 +41,8 @@ class OFDMConfig:
     est_method: str = 'linear'         # 信道估计方法：'linear'（线性插值）或'ls'（最小二乘）
     interp_method: str = 'linear'      # 信道插值方式：'linear'或'nearest'
     est_time: str = 'fft_ml'           # 定时偏移估计方法：'fft_ml'（FFT最大似然）/'diff_phase'（相位差）或'ml_then_phase'（两步法）
-    equ_method: str = 'mmse'          # 信道均衡方法：'mmse'（最小均方误差）或'mrc'（最大比率合并）或'irc'
+    equ_method: str = 'mmse'           # 信道均衡方法：'mmse'（最小均方误差）或'mrc'（最大比率合并）或'irc'
+    eval_method: str = 'nnrx'          # 评估方法：'nnrx'神经网络接收机或'legacy'(传统方法)
     win_size: List[int] = field(default_factory=lambda: [8,1,2])  # 滑动窗口大小（用于信道估计）qpsk/16qam/64qam分别对应的窗口大小
     # 同步配置
     sync_method: str = 'auto'          # 同步方法：'auto'（自动）或'manual'（手动）
@@ -53,7 +54,7 @@ class OFDMConfig:
         # 验证基本参数
         if self.n_fft <= 0 or not self._is_power_of_2(self.n_fft):
             raise ValueError("FFT大小必须是2的幂")
-        if self.n_fft < self.n_subcarrier+self.cp_len:
+        if self.n_fft < self.n_subcarrier+2*self.cp_len:
             raise ValueError("FFT大小必须大于子载波数量+2*循环前缀长度")
         if self.cp_len <= 0:
             raise ValueError("循环前缀长度必须大于0")
@@ -159,7 +160,7 @@ class OFDMConfig:
     
     def get_pilot_symbols(
             self,
-            symbol_idx: int | np.ndarray | None = None,
+            symbol_idx = None,
     ) -> np.ndarray:
         """
         获取指定 OFDM 符号、指定天线的导频序列。
