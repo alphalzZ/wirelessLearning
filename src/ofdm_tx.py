@@ -33,7 +33,7 @@ def compute_k(cfg: OFDMConfig, rate: float) -> int:
 
 def qam_modulation(bits: np.ndarray, Qm: int) -> np.ndarray:
     """
-    Gray-coded QAM
+    5G NR Gray-coded QAM (38.211 §5.1)
     Qm = 2 (QPSK) | 4 (16QAM) | 6 (64QAM)
     Returns power-normalized symbols (E{|d|^2}=1).
     """
@@ -98,7 +98,6 @@ def qam_modulation_NR(bits: np.ndarray, Qm: int) -> np.ndarray:
         osyms = (c[i] + 1j*c[q]) / norm
         
     return osyms
-
 
 def insert_pilots(cfg: OFDMConfig, symbol_idx: int) -> np.ndarray:
     """插入导频符号
@@ -194,7 +193,7 @@ def ofdm_tx(bits: np.ndarray, cfg: OFDMConfig) -> Tuple[np.ndarray, np.ndarray]:
                 start_idx = idx * bits_per_symbol
                 end_idx = start_idx + bits_per_symbol
                 symbol_bits = tx_bits[start_idx:end_idx]
-                data_symbols = qam_modulation(symbol_bits, cfg.mod_order)
+                data_symbols = qam_modulation_NR(symbol_bits, cfg.mod_order)
 
                 ofdm_symbol = np.zeros(cfg.n_fft, dtype=np.complex64)
                 ofdm_symbol[carrier_indices] = data_symbols

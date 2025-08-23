@@ -28,6 +28,7 @@ from src.ofdm_rx import (
     channel_equalization,
     remove_cp_and_fft,
 )
+from src.nnrx.train_with_local import ofdm_nnrx
 from src.channel import awgn_channel,rayleigh_channel, multipath_channel, sionna_fading_channel, sionna_tdl_channel
 
 class TestOFDMSystem(unittest.TestCase):
@@ -62,7 +63,42 @@ class TestOFDMSystem(unittest.TestCase):
 
         # 验证输出
         self.assertEqual(ofdm_symbol.shape, (self.cfg.num_tx_ant, self.cfg.n_fft))
+
+    def test_nnrx(self):
+        weight_path = r'./weights/64QAM-testepoch999-step9999'
+        k = compute_k(self.cfg, self.cfg.code_rate)
+        bits = np.random.randint(0, 2, k)
         
+        # 发送端处理
+        tx_signal, freq_symbols = ofdm_tx(bits, self.cfg)
+        
+        # 添加噪声
+        if self.cfg.channel_type == 'multipath':
+            rx_signal, h_channel = multipath_channel(
+                tx_signal, num_rx=self.cfg.num_rx_ant, num_tx=self.cfg.num_tx_ant
+            )
+        elif self.cfg.channel_type == 'awgn':
+            rx_signal = awgn_channel(tx_signal, num_rx=self.cfg.num_rx_ant, num_tx=self.cfg.num_tx_ant)
+        elif self.cfg.channel_type == 'rayleigh':
+            rx_signal, h_channel = rayleigh_channel(
+                tx_signal, num_rx=self.cfg.num_rx_ant,num_tx=self.cfg.num_tx_ant
+            )
+        elif self.cfg.channel_type == 'sionna_fading':
+            rx_signal = sionna_fading_channel(
+                tx_signal, num_rx=self.cfg.num_rx_ant,num_tx=self.cfg.num_tx_ant
+            )
+        elif self.cfg.channel_type == 'sionna_tdl':
+            rx_signal, h_channel= sionna_tdl_channel(
+                tx_signal, num_rx=self.cfg.num_rx_ant, num_tx=self.cfg.num_tx_ant
+            )
+        else:
+            raise ValueError(f"不支持的信道类型: {self.cfg.channel_type}")
+        rx_signal = add_timing_offset_and_freq_offset(rx_signal, self.cfg)
+
+        rx_bits = ofdm_nnrx(weight_path, rx_signal, self.cfg)
+        bits_error = np.mean(rx_bits.reshape(-1) != bits)
+        print(f'hard decision bit error:{bits_error}')
+
     def test_ofdm_tx_rx(self):
         """测试OFDM收发端功能"""
         # 生成随机比特流
@@ -227,7 +263,7 @@ if __name__ == '__main__':
     # unittest.main()
     suite = unittest.TestSuite()
     # 只添加信道估计测试
-    suite.addTest(TestOFDMSystem('test_ofdm_tx_rx'))
+    suite.addTest(TestOFDMSystem('test_nnrx'))
     # 运行测试
     runner = unittest.TextTestRunner()
     runner.run(suite)

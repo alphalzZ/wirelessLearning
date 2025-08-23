@@ -19,6 +19,7 @@ from src.ofdm_tx import ofdm_tx, add_timing_offset_and_freq_offset, compute_k
 from src.channel import awgn_channel, rayleigh_channel,multipath_channel, sionna_fading_channel, sionna_tdl_channel
 from src.ofdm_rx import ofdm_rx
 from src.metrics import calculate_ber, calculate_ser
+from src.nnrx.train_with_local import ofdm_nnrx
 import matplotlib.pyplot as plt
 
 # 配置日志
@@ -56,8 +57,11 @@ def run_single_experiment(cfg: OFDMConfig) -> float:
 
     rx_signal = add_timing_offset_and_freq_offset(rx_signal, cfg)
     # 接收端处理
-    _, bits_rx = ofdm_rx(rx_signal, cfg)
-    
+    if cfg.eval_method == 'legacy':
+        _, bits_rx = ofdm_rx(rx_signal, cfg)
+    else:
+        weight_path = r'./weights/64QAM-testepoch999-step9999-epoch999-step9999'
+        bits_rx = ofdm_nnrx(weight_path, rx_signal, cfg)
     # 计算性能指标
     ber = calculate_ber(bits_tx, bits_rx.flatten())
 
@@ -67,9 +71,9 @@ def main():
     # 加载配置
     config_path = Path(__file__).parent.parent / "config.yaml"
     cfg = load_config(config_path)
-    snr_db_list = np.arange(-3, 21, 3) 
+    snr_db_list = np.arange(5, 18, 3) 
     num_trials = 100  # 每个SNR点的仿真次数
-    eval_methods = ['zf','mrc']  # 评估方法列表
+    eval_methods = ['legacy','nnrx']  # 评估方法列表
     
     # 创建结果目录
     results_dir = Path(__file__).parent.parent / "results"
@@ -77,10 +81,10 @@ def main():
     
     # 创建结果存储字典
     all_results = {}
-    
+    cfg.sess = None
     # 为每种方法运行仿真
     for i,eval_method in enumerate(eval_methods):
-        cfg.equ_method = eval_method
+        cfg.eval_method = eval_method
         # 运行不同SNR下的实验
         results = []
         for snr_db in snr_db_list:
