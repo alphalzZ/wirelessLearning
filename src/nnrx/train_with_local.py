@@ -140,7 +140,7 @@ def log_metrics(step, loss, rate, summary_writer, mode="train"):
         tf.summary.scalar(f"{mode}_rate", rate, step=step)
 
 def train_model(model_weights_path):
-    epochs = 1000
+    epochs = 10
     training_batch_size = 20
     training_logdir = "train_log"
     label = '64QAM-cnn-recevier'
@@ -165,15 +165,9 @@ def train_model(model_weights_path):
     # Assuming data_generator produces received frequency-domain symbols and original bits
     cfg = load_config(r'config.yaml')  # Load OFDM configuration
     # Define steps per epoch for online generation
-<<<<<<< HEAD
-    steps_per_epoch = 5 # Example value, can be adjusted
-
-    global_steps = epochs * steps_per_epoch
-=======
     steps_per_epoch = 10 # Example value, can be adjusted
     global_steps = epochs * steps_per_epoch
 
->>>>>>> 8227443ca052392c62e07c847de5939f2bd23955
     optimizer = tf.keras.optimizers.AdamW(learning_rate=ThreePhaseLR(target_lr=0.001, total_steps=global_steps, warmup_steps=int(global_steps*0.02),
                                                                      decay_start=int(0.1*global_steps)), weight_decay=1e-4, clipnorm=2.)
     for epoch in range(epochs):
@@ -181,20 +175,11 @@ def train_model(model_weights_path):
         # The generator is assumed to yield (received_freq_symbols, original_bits)
         # received_freq_symbols shape: (batch_size, num_rx_ant, num_symbols, n_subcarrier)
         # original_bits shape: (batch_size, k)
-<<<<<<< HEAD
-        cfg.snr_db = np.random.randint(10, 25)  # Random SNR for each epoch
-        cfg.timing_offset = np.random.randint(0, 20)  # Random timing offset for each epoch
-        cfg.freq_offset = np.random.uniform(-0.05, 0.05)  # Random frequency offset for each epoch
-        dataset = create_tf_dataset(cfg, training_batch_size)
-        dataset = dataset.repeat()
-        
-=======
         cfg.snr_db = np.random.randint(5,30)
         cfg.freq_offset = np.random.uniform(-0.05,0.05)
         cfg.timing_offset = np.random.randint(0,100)
         dataset = create_tf_dataset(cfg, training_batch_size)    
         dataset = dataset.repeat()    
->>>>>>> 8227443ca052392c62e07c847de5939f2bd23955
         print(f"\nEpoch {epoch+1}/{epochs}")
         for step,(train_data, llr_label) in enumerate(dataset.take(steps_per_epoch)):
             # Transpose train_data to match model expected input shape [batch_size, n_subcarrier, num_symbols, num_rx_ant]
@@ -448,6 +433,6 @@ if __name__ == "__main__":
     # out=model(dummydata)
     # print(out.shape)
 
-    model_weights_path = r'D:\pyHome\projs\wirelessLearning-support-2-layer\weights\64QAM-testepoch999-step9999-epoch999-step9999'
-    # train_model(model_weights_path)
-    transferOnnx(model_weights_path)
+    model_weights_path = r'E:\github\wirelessLearning\weights\64QAM-testepoch999-step9999-epoch999-step9999'
+    train_model(model_weights_path)
+    # transferOnnx(model_weights_path)
