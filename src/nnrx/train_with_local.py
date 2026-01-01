@@ -140,7 +140,7 @@ def log_metrics(step, loss, rate, summary_writer, mode="train"):
         tf.summary.scalar(f"{mode}_rate", rate, step=step)
 
 def train_model(model_weights_path):
-    epochs = 10
+    epochs = 1000
     training_batch_size = 20
     training_logdir = "train_log"
     label = '64QAM-cnn-recevier'
@@ -204,8 +204,8 @@ def train_model(model_weights_path):
                     pickle.dump(weights, f)
     print("\n" + "-"*50)  # 分隔线
 
-def ofdm_nnrx(model_weights_path, signal:np.ndarray, cfg:OFDMConfig, run_onnx_flag=True):
-    
+
+def ofdm_transformer_rx(model_weights_path, signal:np.ndarray, cfg:OFDMConfig, run_onnx_flag):
     if signal.ndim == 1:
         signal = signal[None, :]
 
@@ -299,6 +299,7 @@ def ofdm_nnrx(model_weights_path, signal:np.ndarray, cfg:OFDMConfig, run_onnx_fl
     llr = llr[...,:cfg.mod_order].reshape(-1)
     bits = (llr > 0).astype(np.int8)
     return bits
+
 
 def ofdm_nnrx_matlab(rx_symbols_real, rx_symbols_imag, pilot_symbol_indices, pilot_symbols_real, pilot_symbols_imag, pilot_indices,nfft,mod_order,plot=False):
     # simulation with matlab
@@ -433,6 +434,6 @@ if __name__ == "__main__":
     # out=model(dummydata)
     # print(out.shape)
 
-    model_weights_path = r'E:\github\wirelessLearning\weights\64QAM-testepoch999-step9999-epoch999-step9999'
-    train_model(model_weights_path)
-    # transferOnnx(model_weights_path)
+    model_weights_path = r'D:\pyHome\projs\wirelessLearning-support-2-layer\weights\64QAM-testepoch999-step9999-epoch999-step9999'
+    # train_model(model_weights_path)
+    transferOnnx(model_weights_path)

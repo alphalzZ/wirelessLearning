@@ -77,6 +77,7 @@ def qam_modulation_NR(bits: np.ndarray, Qm: int) -> np.ndarray:
         raise ValueError(f"len(bits) must be a multiple of Qm={Qm}")
 
     b = bits.astype(np.int8).reshape(-1, Qm)   # 强制 0/1 整数
+
     if Qm == 2:                     # QPSK
         i = 1 - 2 * b[:, 0]
         q = 1 - 2 * b[:, 1]

@@ -19,7 +19,6 @@ from src.ofdm_tx import ofdm_tx, add_timing_offset_and_freq_offset, compute_k
 from src.channel import awgn_channel, rayleigh_channel,multipath_channel, sionna_fading_channel, sionna_tdl_channel
 from src.ofdm_rx import ofdm_rx
 from src.metrics import calculate_ber, calculate_ser
-from src.nnrx.train_with_local import ofdm_nnrx
 import matplotlib.pyplot as plt
 
 # 配置日志
@@ -59,10 +58,28 @@ def run_single_experiment(cfg: OFDMConfig) -> float:
     # 接收端处理
     if cfg.eval_method == 'legacy':
         _, bits_rx = ofdm_rx(rx_signal, cfg)
-    else:
+    elif cfg.eval_method == 'nnrx':
+        from src.nnrx.train_with_local import ofdm_nnrx
         weight_path = r'./weights/64QAM-testepoch999-step9999-epoch999-step9999'
         bits_rx = ofdm_nnrx(weight_path, rx_signal, cfg)
+    elif cfg.eval_method == 'transfomer':
+        from src.TransformerRx.data_generator_torch import ofdm_transformer_rx
+        # print('Apply transformer recevier!!')
+        run_onnx_falg = False
+        plus_flag = True
+        if plus_flag:
+            weight_path = r'D:\pyHome\projs\wirelessLearning-support-2-layer\src\TransformerRx\weights\transformer_recevier_base_stage1_bce.pth'
+        else:
+            weight_path = r'D:\pyHome\projs\wirelessLearning-support-2-layer\src\TransformerRx\weights\transformer_recevier_stage2_bce.pth'
+        bits_rx = ofdm_transformer_rx(weight_path, rx_signal, cfg, run_onnx_falg, plus_flag)
+    else:
+        print("method not defined!")
+        pass
     # 计算性能指标
+    # print('tx bits shape:',bits_tx.shape)
+    # print('tx bits:', bits_tx[100:110])
+    # print('rx bits shape:',bits_rx.shape)
+    # print('rx_bits:', bits_rx[100:110])
     ber = calculate_ber(bits_tx, bits_rx.flatten())
 
     return ber
@@ -71,10 +88,13 @@ def main():
     # 加载配置
     config_path = Path(__file__).parent.parent / "config.yaml"
     cfg = load_config(config_path)
-    snr_db_list = np.arange(5, 18, 3) 
-    num_trials = 100  # 每个SNR点的仿真次数
-    eval_methods = ['legacy','nnrx']  # 评估方法列表
-    
+    snr_db_start = 0
+    snr_db_end = 30
+    snr_db_step = 5
+    snr_db_list = np.arange(snr_db_start,snr_db_end, snr_db_step) 
+    num_trials = 50  # 每个SNR点的仿真次数
+    # eval_methods = ['legacy','nnrx','transfomer']  # 评估方法列表
+    eval_methods = ['transfomer','legacy']
     # 创建结果目录
     results_dir = Path(__file__).parent.parent / "results"
     results_dir.mkdir(exist_ok=True)
@@ -82,6 +102,7 @@ def main():
     # 创建结果存储字典
     all_results = {}
     cfg.sess = None
+    cfg.channel_type = 'multipath' #awgn/multipath/rayleigh
     # 为每种方法运行仿真
     for i,eval_method in enumerate(eval_methods):
         cfg.eval_method = eval_method
@@ -124,7 +145,7 @@ def main():
     plt.legend()
     
     # 保存图片
-    plt.savefig(results_dir / f"ber_vs_snr__chan_type{cfg.channel_type}_mod{cfg.mod_order}_numTx{cfg.num_tx_ant}_numRx{cfg.num_rx_ant}_评估方法{eval_methods}.png")
+    plt.savefig(results_dir / f"ber_vs_snr__chan_type{cfg.channel_type}_mod{cfg.mod_order}_numTx{cfg.num_tx_ant}_numRx{cfg.num_rx_ant}_SNRdB{snr_db_start}-{snr_db_end}_评估方法{eval_methods}.png")
     plt.show()
     plt.close()
 

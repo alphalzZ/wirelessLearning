@@ -41,7 +41,7 @@ class OFDMConfig:
     est_method: str = 'linear'         # 信道估计方法：'linear'（线性插值）或'ls'（最小二乘）
     interp_method: str = 'linear'      # 信道插值方式：'linear'或'nearest'
     est_time: str = 'fft_ml'           # 定时偏移估计方法：'fft_ml'（FFT最大似然）/'diff_phase'（相位差）或'ml_then_phase'（两步法）
-    equ_method: str = 'mmse'           # 信道均衡方法：'mmse'（最小均方误差）或'mrc'（最大比率合并）或'irc'
+    equ_method: str = 'mrc'           # 信道均衡方法：'mmse'（最小均方误差）或'mrc'（最大比率合并）或'irc'
     eval_method: str = 'nnrx'          # 评估方法：'nnrx'神经网络接收机或'legacy'(传统方法)
     win_size: List[int] = field(default_factory=lambda: [8,1,2])  # 滑动窗口大小（用于信道估计）qpsk/16qam/64qam分别对应的窗口大小
     # 同步配置

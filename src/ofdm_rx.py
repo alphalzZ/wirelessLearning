@@ -33,7 +33,7 @@ def estimate_frequency_offset(
     pilot_symbols: np.ndarray,
     pilot_indices: np.ndarray,
     cfg: OFDMConfig,
-) -> np.ndarray | float:
+):
     """基于两帧导频的相位差估计频偏，支持多层 OCC 导频"""
 
     pilot_symbol_indices = cfg.get_pilot_symbol_indices()
@@ -280,7 +280,7 @@ def estimate_timing_offset(
     pilot_symbols: np.ndarray,
     pilot_indices: np.ndarray,
     cfg: OFDMConfig,
-) -> np.ndarray | float:
+):
     """估计符号定时偏移
     """
     if cfg.est_time == "fft_ml":
@@ -300,8 +300,8 @@ def estimate_timing_offset(
 def estimate_channel(
     rx_symbols: np.ndarray,
     cfg: OFDMConfig,
-    pilot_symbols: np.ndarray | None = None,
-    pilot_indices: np.ndarray | None = None,
+    pilot_symbols = None,
+    pilot_indices = None,
 ) -> np.ndarray:
     """信道估计，支持多层 OCC 导频"""
 
@@ -575,8 +575,8 @@ def noise_covariance_estimate(
     rx_symbols: np.ndarray,
     Hest: np.ndarray,
     cfg: OFDMConfig,
-    pilot_symbols: np.ndarray | None = None,
-    pilot_indices: np.ndarray | None = None,
+    pilot_symbols = None,
+    pilot_indices = None,
 ) -> np.ndarray:
     """估计每个子载波的噪声协方差矩阵
 
@@ -637,15 +637,15 @@ def noise_covariance_estimate(
         end = min(cfg.n_subcarrier, j + cfg.pilot_spacing + window_size)
         cov_smooth[j, ...] = np.mean(cov_full[start:end, ...], axis=0)
     # 稍作正则化，避免奇异
-    for sc in range(n_sub):
-        cov_smooth[sc] += 1e-12 * np.eye(num_ant)
+    # for sc in range(n_sub):
+    #     cov_smooth[sc] += 1e-12 * np.eye(num_ant)
 
     return cov_smooth
 
 def channel_equalization(
     rx_symbols: NDArray[np.complex128],
     h_est: NDArray[np.complex128],
-    noise_var: Optional[np.ndarray | float] = None,
+    noise_var: Optional[np.ndarray] = None,
     cfg: OFDMConfig = None,
     noise_cov: Optional[Tuple[np.ndarray, np.ndarray]] = None,
 ) -> NDArray[np.complex128]:
@@ -1035,6 +1035,7 @@ def ofdm_rx_matlab(rx_symbols_real, rx_symbols_imag, pilot_symbol_indices, pilot
 
     est_timing = []
     est_freq_offset = []
+    print('debug0')
     est_timing = []
     est_freq_offset = []
     for a in range(num_ant):
@@ -1073,6 +1074,8 @@ def ofdm_rx_matlab(rx_symbols_real, rx_symbols_imag, pilot_symbol_indices, pilot
     )
     #channel est
     # 3. 信道估计和均衡
+    print('debug1')
+
     h_est_layer = []
     for l in range(num_layer):#多layer下倾向联合信道估计
         h_est_ant = []
@@ -1100,6 +1103,7 @@ def ofdm_rx_matlab(rx_symbols_real, rx_symbols_imag, pilot_symbol_indices, pilot
     RxPower = np.stack(power_ant, axis=0)
     sinr = 10 * np.log10((np.mean(RxPower)) / np.mean(noise_var))
     print(f"估计的SINR: {sinr :.2f} dB")
+    print('complet noise est !!!')
     #信道均衡
 
     noise_cov = [[] for _ in range(num_layer)]
