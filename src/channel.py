@@ -17,34 +17,45 @@ if project_root not in sys.path:
 
 from src.config import OFDMConfig
 
-def awgn_channel(signal: np.ndarray, num_rx: int = 1) -> np.ndarray:
+
+def awgn_channel(
+    signal: np.ndarray,
+    *,
+    num_rx: int = 1,
+    num_tx: int = 1,
+) -> np.ndarray:
     """AWGN信道
 
     Args:
-        signal: 输入信号
+        signal: (num_tx, N) 或 (N,) 输入信号
+        num_rx: 接收天线数
+        num_tx: 发送天线数
 
     Returns:
-        经过AWGN信道的信号
+        (num_rx, N) 或 (N,) 加噪后信号
     """
 
     # 噪声功率固定为 1，发送端会根据 ``snr_db`` 缩放信号
 
-    # 生成复高斯噪声 (E{|n|^2}=1)
-    if num_rx == 1:
-        noise_shape = signal.shape
-    else:
-        noise_shape = (num_rx, signal.shape[0]) if signal.ndim == 1 else signal.shape
+    # 输入信号形状统一为 (num_tx, N)
+    if signal.ndim == 1:
+        signal = signal[None, :]
+    N = signal.shape[1]
+    num_tx = signal.shape[0]
+
+    # 噪声功率固定为 1，发送端会根据 ``snr_db`` 缩放信号
     noise = (
-        np.random.randn(*noise_shape) + 1j * np.random.randn(*noise_shape)
+        np.random.randn(num_rx, N) + 1j * np.random.randn(num_rx, N)
     ) / np.sqrt(2)
 
-    if num_rx == 1:
-        rx_signal = signal + noise
-    else:
-        if signal.ndim == 1:
-            rx_signal = signal[None, :] + noise
-        else:
-            rx_signal = signal + noise
+    H = np.eye(num_tx)* np.exp(1j*np.random.randn(num_tx, num_tx))
+    H = np.repeat(H, num_rx//num_tx , axis=0)  # (num_rx, num_tx)
+
+    rx_signal = H @ signal + noise
+
+    # 单天线场景保持 (N,) 输出
+    if rx_signal.shape[0] == 1:
+        rx_signal = rx_signal.reshape(-1)
 
     return rx_signal
 
@@ -55,53 +66,57 @@ def rayleigh_channel(
     block_fading: bool = True,
     rng: Optional[np.random.Generator] = None,
     num_rx: int = 1,
+    num_tx: int = 1,
 ) -> Tuple[NDArray[np.complex128], NDArray[np.complex128]]:
     """
     瑞利平坦衰落 (block 或 sample‑by‑sample) + AWGN
 
     参数
     ----
-    signal        : (N,)  发送复基带
-    block_fading  : True  -> 整帧 1 个系数; False -> 每采样独立
+    signal        : (num_tx, N) 或 (N,) 发送复基带
+    block_fading  : True -> 整帧 1 个系数; False -> 每采样独立
     rng           : numpy.random.Generator, 可选
+    num_rx        : 接收天线数
+    num_tx        : 发送天线数
 
     返回
     ----
-    rx_signal     : (N,)  接收信号
-    h             : (1,) 或 (N,) 信道复增益
+    rx_signal     : (num_rx, N) 接收信号
+    h             : (num_rx, num_tx) 或 (num_rx, num_tx, N) 信道增益
     """
     if rng is None:
         rng = np.random.default_rng()
 
+    if signal.ndim == 1:
+        signal = signal[None, :]
+    N = signal.shape[1]
+    num_tx = signal.shape[0]
+
     # 1) 生成瑞利系数：CN(0,1) / sqrt(2)，功率均值 = 1
     if block_fading:
-        h = (
-            rng.standard_normal(num_rx) + 1j * rng.standard_normal(num_rx)
+        H = (
+            rng.standard_normal((num_rx, num_tx))
+            + 1j * rng.standard_normal((num_rx, num_tx))
         ) / np.sqrt(2)
-        h_sig = h[:, None]
+        H_time = H[:, :, None]
     else:  # independent fast fading
-        h = (
-            rng.standard_normal((num_rx, signal.shape[0]))
-            + 1j * rng.standard_normal((num_rx, signal.shape[0]))
+        H = (
+            rng.standard_normal((num_rx, num_tx, N))
+            + 1j * rng.standard_normal((num_rx, num_tx, N))
         ) / np.sqrt(2)
-        h_sig = h
+        H_time = H
 
-    noise_shape = (num_rx, signal.shape[0]) if num_rx > 1 else signal.shape
     noise = (
-        np.random.randn(*noise_shape) + 1j * np.random.randn(*noise_shape)
+        np.random.randn(num_rx, N) + 1j * np.random.randn(num_rx, N)
     ) / np.sqrt(2)
 
-    # 3) 通过信道 + 加噪
-    if num_rx == 1:
-        rx_signal = h_sig * signal + noise
-    else:
-        rx_signal = h_sig * signal[None, :] + noise
+    rx_wo_noise = np.sum(H_time * signal[None, :, :], axis=1)
+    rx_signal = rx_wo_noise + noise
 
-    # reshape h 为 (N,) 方便后续逐样本处理；block_fading 时重复填充
     if block_fading:
-        h = np.repeat(h_sig, signal.shape[0], axis=1)
-
-    return rx_signal.astype(np.complex128), h.astype(np.complex128)
+        return rx_signal.astype(np.complex128), H.astype(np.complex128)
+    else:
+        return rx_signal.astype(np.complex128), H.astype(np.complex128)
 
 
 def multipath_channel(
@@ -110,24 +125,32 @@ def multipath_channel(
     max_delay: int = 16,
     rng: Optional[np.random.Generator] = None,
     num_rx: int = 1,
+    num_tx: int = 1,
 ) -> Tuple[NDArray[np.complex128], NDArray[np.complex128]]:
     r"""
     频率选择性瑞利多径信道 + AWGN
 
     参数
     ----
-    signal     : (N,)  发送时域复基带
+    signal     : (num_tx, N) 或 (N,) 发送时域复基带
     num_paths  : 多径条数 (含直射 LOS / 最早径)
     max_delay  : 最大离散时延 (采样数, 含 0)
     rng        : numpy.random.Generator, 便于复现 (默认全局 RNG)
+    num_rx     : 接收天线数
+    num_tx     : 发送天线数
 
     返回
     ----
-    rx_signal  : shape 与 signal 相同, 经过信道 + 加噪
-    h          : (max_delay+1,) 离散时域脉冲响应
+    rx_signal  : (num_rx, N) 经过信道 + 加噪后的信号
+    h          : (num_rx, num_tx, max_delay+1) 离散时域脉冲响应
     """
     if rng is None:
         rng = np.random.default_rng()
+
+    if signal.ndim == 1:
+        signal = signal[None, :]
+    N = signal.shape[1]
+    num_tx = signal.shape[0]
 
     # -------------------------------------------------
     # 1) 随机时延 —— 保证“互不重叠”且包含 0
@@ -142,31 +165,32 @@ def multipath_channel(
     # -------------------------------------------------
     # 2) 瑞利增益，单位平均功率
     # -------------------------------------------------
-    gains = (rng.standard_normal(num_paths) + 1j * rng.standard_normal(num_paths)) / np.sqrt(2)
-    gains /= np.sqrt(np.sum(np.abs(gains) ** 2))        # 归一化 ∑|g|² = 1
+    gains = (
+        rng.standard_normal((num_rx, num_tx, num_paths))
+        + 1j * rng.standard_normal((num_rx, num_tx, num_paths))
+    ) / np.sqrt(2)
+    gains /= np.sqrt(np.sum(np.abs(gains) ** 2, axis=2, keepdims=True))
 
     # -------------------------------------------------
     # 3) 构造离散脉冲响应 h[n]
     # -------------------------------------------------
-    h = np.zeros(max_delay + 1, dtype=np.complex128)
-    h[delays] = gains                                   # 重叠时延已避免，无需累加
+    h = np.zeros((num_rx, num_tx, max_delay + 1), dtype=np.complex128)
+    h[:, :, delays] = gains  # shape (num_rx,num_tx,max_delay+1)
 
     # -------------------------------------------------
     # 4) 通过信道 (线性卷积) —— 长信号用 FFT 卷积更快
     # -------------------------------------------------
-    rx_wo_noise_single = np.convolve(signal, h, mode="same")   # 保持与原长一致
-    if num_rx == 1:
-        rx_wo_noise = rx_wo_noise_single
-    else:
-        rx_wo_noise = np.tile(rx_wo_noise_single[None, :], (num_rx, 1))
+    rx_wo_noise = np.zeros((num_rx, N), dtype=np.complex128)
+    for i in range(num_rx):
+        for j in range(num_tx):
+            rx_wo_noise[i] += np.convolve(signal[j], h[i, j], mode="same")
 
     # -------------------------------------------------
     # 5) AWGN 噪声，参照接收端功率设 SNR
     # -------------------------------------------------
 
-    noise_shape = (num_rx, signal.shape[0]) if num_rx > 1 else signal.shape
     noise = (
-        np.random.randn(*noise_shape) + 1j * np.random.randn(*noise_shape)
+        np.random.randn(num_rx, N) + 1j * np.random.randn(num_rx, N)
     ) / np.sqrt(2)
 
     rx_signal = rx_wo_noise + noise
@@ -178,24 +202,45 @@ def sionna_fading_channel(
     *,
     block_fading: bool = True,
     num_rx: int = 1,
+    num_tx: int = 1,
 ):
-    """Rayleigh衰落信道封装，优先使用Sionna实现"""
+    """Rayleigh衰落信道封装，优先使用Sionna实现
+
+    参数
+    ----
+    signal       : (num_tx, N) 或 (N,) 输入信号
+    block_fading : 是否块衰落
+    num_rx       : 接收天线数
+    num_tx       : 发送天线数
+
+    返回
+    ----
+    接收信号 ``(num_rx, N)``
+    """
     try:
         import tensorflow as tf
         from sionna.phy.channel import FlatFadingChannel
     except Exception as exc:  # pragma: no cover - optional dependency
-        # 回退到本地实现
-        return rayleigh_channel(signal, block_fading=block_fading, num_rx=num_rx)
+        # 回退到本地实现，仅返回接收信号
+        rx, _ = rayleigh_channel(
+            signal,
+            block_fading=block_fading,
+            num_rx=num_rx,
+            num_tx=num_tx,
+        )
+        return rx
 
-    signal_tf = tf.constant(signal[None, :, None], dtype=tf.complex64)
+    if signal.ndim == 1:
+        signal = signal[None, :]
+    signal_tf = tf.constant(signal.transpose(1, 0)[None, :, :], dtype=tf.complex64)
     ch = FlatFadingChannel(
-        num_tx_ant=1,
+        num_tx_ant=num_tx,
         num_rx_ant=num_rx,
         add_awgn=False
     )
     rx_tf = ch(signal_tf)
-    rx_np = tf.squeeze(rx_tf).numpy().transpose()
-    rx_np = awgn_channel(rx_np, num_rx=num_rx)
+    rx_np = tf.transpose(tf.squeeze(rx_tf), perm=[1, 0]).numpy()
+    rx_np = awgn_channel(rx_np, num_rx=num_rx, num_tx=num_tx)
     return rx_np
 
 
@@ -206,14 +251,34 @@ def sionna_tdl_channel(
     delay_spread: float = 300e-9,
     carrier_freq: float = 3.5e9,
     num_rx: int = 1,
-) -> NDArray[np.complex128]:
-    """3GPP TDL信道封装，优先使用Sionna实现"""
+    num_tx: int = 1,
+) -> Tuple[NDArray[np.complex128], NDArray[np.complex128]]:
+    """3GPP TDL信道封装，优先使用Sionna实现
+
+    参数
+    ----
+    signal        : (num_tx, N) 或 (N,) 输入信号
+    model         : TDL模型类别
+    delay_spread  : 时延扩展
+    carrier_freq  : 载波频率
+    num_rx        : 接收天线数
+    num_tx        : 发送天线数
+
+    返回
+    ----
+    rx_signal : (num_rx, N) 接收信号
+    h         : (num_rx, num_tx, L) 信道脉冲响应
+    """
     try:
         from sionna.phy.channel.tr38901 import TDL
     except Exception as exc:  # pragma: no cover - optional dependency
-        return multipath_channel(signal, num_rx=num_rx)[0]
+        return multipath_channel(
+            signal,
+            num_rx=num_rx,
+            num_tx=num_tx,
+        )
 
-    tdl = TDL(model, delay_spread, carrier_freq, num_rx_ant=num_rx, num_tx_ant=1)
+    tdl = TDL(model, delay_spread, carrier_freq, num_rx_ant=num_rx, num_tx_ant=num_tx)
     delays = tdl.delays.numpy()
     powers = tdl.mean_powers.numpy()
 
@@ -222,18 +287,24 @@ def sionna_tdl_channel(
     delay_samples = np.round(delays / delays.max() * max_delay).astype(int)
 
     rng = np.random.default_rng()
-    h = np.zeros((num_rx, delay_samples.max() + 1), dtype=np.complex128)
+    h = np.zeros((num_rx, num_tx, delay_samples.max() + 1), dtype=np.complex128)
     for d, p in zip(delay_samples, powers):
-        gain = (rng.standard_normal(num_rx) + 1j * rng.standard_normal(num_rx)) / np.sqrt(2)
-        h[:, d] += gain * np.sqrt(p)
+        gain = (
+            rng.standard_normal((num_rx, num_tx))
+            + 1j * rng.standard_normal((num_rx, num_tx))
+        ) / np.sqrt(2)
+        h[:, :, d] += gain * np.sqrt(p)
 
-    if num_rx == 1:
-        rx = np.convolve(signal, h[0], mode="same")
-    else:
-        rx = np.stack([np.convolve(signal, h[i], mode="same") for i in range(num_rx)], axis=0)
+    if signal.ndim == 1:
+        signal = signal[None, :]
+    N = signal.shape[1]
+    rx = np.zeros((num_rx, N), dtype=np.complex128)
+    for i in range(num_rx):
+        for j in range(num_tx):
+            rx[i] += np.convolve(signal[j], h[i, j], mode="same")
 
-    rx = awgn_channel(rx, num_rx=num_rx)
-    return rx
+    rx = awgn_channel(rx, num_rx=num_rx, num_tx=num_tx)
+    return rx, h
 
 if __name__ == "__main__":
     # 创建测试配置
@@ -248,7 +319,6 @@ if __name__ == "__main__":
         pilot_spacing=2,
         est_method='linear',
         interp_method='linear',
-        equalizer='zf',
         est_time='fft_ml',
         channel_type='awgn',
         display_est_result=False,
